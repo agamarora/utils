@@ -326,7 +326,7 @@ def build_cpu(avg_pct, freq_str, throttled):
     return panel(Group(*chart, info), "CPU")
 
 
-def build_memory(ram, swap):
+def _memory_lines(ram, swap):
     lines = []
     bar = hbar(ram.percent)
     row = Text()
@@ -343,12 +343,12 @@ def build_memory(ram, swap):
         srow.append(f"  {swap.percent:.1f}%", style=_color(swap.percent) + " bold")
         lines.append(srow)
         lines.append(Text(f"      {fmt_bytes(swap.used)} / {fmt_bytes(swap.total)}", style="dim"))
-    return panel(Group(*lines), "Memory")
+    return lines
 
 
-def build_gpu(gpu_pct, gpu_mem, gpu_temp):
+def _gpu_lines(gpu_pct, gpu_mem, gpu_temp):
     if not GPU_AVAILABLE or gpu_pct is None:
-        return panel(Text("No GPU data", style="dim"), "GPU")
+        return [Text("No GPU data", style="dim")]
     lines = []
     row = Text()
     row.append_text(hbar(gpu_pct))
@@ -358,8 +358,24 @@ def build_gpu(gpu_pct, gpu_mem, gpu_temp):
         lines.append(Text(f"VRAM  {fmt_bytes(gpu_mem.used)} / {fmt_bytes(gpu_mem.total)}", style="dim"))
     if gpu_temp is not None:
         lines.append(Text(f"Temp  {gpu_temp}°C", style=_temp_color(gpu_temp) + " bold"))
-    lines.append(Text(""))  # spacer to match Memory panel height
-    return panel(Group(*lines), GPU_NAME[:20] if GPU_AVAILABLE else "GPU")
+    return lines
+
+
+def build_mem_gpu(ram, swap, gpu_pct, gpu_mem, gpu_temp):
+    """Build Memory and GPU panels with matched heights."""
+    mem = _memory_lines(ram, swap)
+    gpu = _gpu_lines(gpu_pct, gpu_mem, gpu_temp)
+    # Pad shorter list so both panels have equal height
+    while len(gpu) < len(mem):
+        gpu.append(Text(""))
+    while len(mem) < len(gpu):
+        mem.append(Text(""))
+    gpu_title = GPU_NAME[:20] if GPU_AVAILABLE else "GPU"
+    side = Table(box=None, padding=0, show_header=False, expand=True)
+    side.add_column(ratio=3)
+    side.add_column(ratio=2)
+    side.add_row(panel(Group(*mem), "Memory"), panel(Group(*gpu), gpu_title))
+    return side
 
 
 def build_temps(temps):
@@ -544,15 +560,9 @@ def build_display():
         except Exception:
             pass
 
-    # ── Side-by-side Memory + GPU ──────────────────────────
-    side = Table(box=None, padding=0, show_header=False, expand=True)
-    side.add_column(ratio=3)
-    side.add_column(ratio=2)
-    side.add_row(build_memory(ram, swap), build_gpu(gpu_pct, gpu_mem, gpu_temp))
-
     return Group(
         build_cpu(avg_pct, freq_str, throttled),
-        side,
+        build_mem_gpu(ram, swap, gpu_pct, gpu_mem, gpu_temp),
         build_temps(temps),
         build_network(rx_now, tx_now),
         build_disks(disks),
