@@ -365,16 +365,18 @@ def build_mem_gpu(ram, swap, gpu_pct, gpu_mem, gpu_temp):
     """Build Memory and GPU panels with matched heights."""
     mem = _memory_lines(ram, swap)
     gpu = _gpu_lines(gpu_pct, gpu_mem, gpu_temp)
-    # Pad shorter list so both panels have equal height
-    while len(gpu) < len(mem):
-        gpu.append(Text(""))
-    while len(mem) < len(gpu):
-        mem.append(Text(""))
+    # Force both panels to the same height (content lines + 2 for border)
+    h = max(len(mem), len(gpu)) + 2
     gpu_title = GPU_NAME[:20] if GPU_AVAILABLE else "GPU"
     side = Table(box=None, padding=0, show_header=False, expand=True)
     side.add_column(ratio=3)
     side.add_column(ratio=2)
-    side.add_row(panel(Group(*mem), "Memory"), panel(Group(*gpu), gpu_title))
+    side.add_row(
+        Panel(Group(*mem), title=f"[bold white]Memory[/bold white]",
+              border_style="bright_black", box=rich_box.ROUNDED, padding=(0, 1), height=h),
+        Panel(Group(*gpu), title=f"[bold white]{gpu_title}[/bold white]",
+              border_style="bright_black", box=rich_box.ROUNDED, padding=(0, 1), height=h),
+    )
     return side
 
 
