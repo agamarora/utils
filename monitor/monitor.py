@@ -1,8 +1,9 @@
 """
 System Monitor — minimalist terminal cockpit
-Vertical bars for CPU cores, panel structure, aggregated network stats.
+Rolling CPU waveform, disk active-time % via PDH, per-drive I/O,
+split process panels (CPU + RAM), real clock speed from LHM.
 Requires: psutil, rich, pynvml
-Optional: LibreHardwareMonitor running for CPU temps
+Optional: LibreHardwareMonitor running for CPU temps + clock speeds
 """
 
 import psutil
