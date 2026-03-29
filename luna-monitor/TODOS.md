@@ -39,10 +39,65 @@ These headers give exact utilization % without the usage endpoint. But Claude Co
 - Pulse disabled as statusLine (was competing for same endpoint)
 
 **Next steps when resuming:**
-1. Decide: keep Claude Status panel (shows stale/empty data) or hide it until API works?
+
+### Phase 1: Proxy Gateway Experiment (NEXT SESSION)
+
+The core problem: we need the **denominator** (utilization %) to make the dashboard meaningful. Counting tokens without knowing the limit is just a number with no context. The only real-time source of utilization % is the rate limit headers on every API response — but Claude Code doesn't expose them.
+
+**Experiment: API proxy that intercepts rate limit headers**
+
+Inspired by ccNexus (810 stars, active). Sit a local proxy between Claude Code and `api.anthropic.com`. Capture these headers from every completion response:
+- `anthropic-ratelimit-unified-5h-utilization` → session %
+- `anthropic-ratelimit-unified-7d-utilization` → weekly %
+- `anthropic-ratelimit-unified-*-resets-at` → reset timestamps
+
+**Experiment steps:**
+1. Build minimal transparent HTTPS proxy (mitmproxy or custom)
+2. Configure Claude Code to route through it (`ANTHROPIC_BASE_URL` or system proxy)
+3. Verify headers are present and parseable on real responses
+4. Feed captured data to luna-monitor via shared file or socket
+5. Measure: does it add latency? Does Claude Code work normally through it?
+
+**Key question:** Can Claude Code be configured to use a custom base URL or proxy? Check `ANTHROPIC_BASE_URL`, `HTTP_PROXY`, `HTTPS_PROXY` env vars, or Claude Code settings.
+
+**Reference implementations:**
+- `lich0821/ccNexus` (810★, active) — full proxy with credential rotation, token pool, multi-format support
+- `steipete/CodexBar` (9.5K★, active) — multi-method fallback: OAuth → browser cookies → CLI PTY
+
+### Phase 2: Alternatives (if proxy doesn't work)
+
+**2a. Web cookie endpoint** — `claude.ai/api/organizations/{orgId}/usage` via browser cookies. Separate rate limit bucket from OAuth, no 429s. Fragile (cookies expire) but proven by CodexBar.
+
+**2b. Statusline JSON** — Monitor Anthropic feature requests:
+- [Issue #27915](https://github.com/anthropics/claude-code/issues/27915) — Expose rate-limit data in statusLine JSON (30+ upvotes)
+- [Issue #34074](https://github.com/anthropics/claude-code/issues/34074) — Add rate limit utilization to status line JSON
+- [Issue #38380](https://github.com/anthropics/claude-code/issues/38380) — Expose usage/rate limit data via CLI flag or hook event
+
+**2c. OTel telemetry** — `CLAUDE_CODE_ENABLE_TELEMETRY=1` pipes data to OpenTelemetry collector. `claude-code-otel` (322★) did this but is stale (last push Jun 2025). Heavy but enterprise-grade.
+
+### Phase 3: Full Sprint (once data source is proven)
+
+Once we know which method reliably delivers utilization %, run a full `/autoplan` sprint to:
+1. Incorporate mature JSONL parsing from ccusage (dedup, weighting, window alignment)
+2. Wire proven utilization source into Claude Status panel
+3. Build real burndown: tokens spent + limit + burn rate → "~Xh remaining"
+4. Consider: should luna-monitor BE a statusLine command?
+
+### Old questions (still open)
+1. Decide: keep Claude Status panel (shows stale/empty data) or hide it until data source works?
 2. Redesign Activity panel around JSONL-only data (waveform is the real value)
-3. Monitor Anthropic's statusLine JSON feature request — when they ship it, we get free utilization %
-4. Consider: should luna-monitor BE a statusLine command instead of a separate tool?
+
+### Ecosystem context (researched 2026-03-29)
+
+| Tool | Stars | Method | Status |
+|---|---|---|---|
+| ccusage | 12,076 | JSONL parsing | Active (today) |
+| claude-hud | 14,822 | Claude Code plugin | Active (yesterday) |
+| CodexBar | 9,528 | Multi-method (OAuth → cookies → CLI) | Active (today) |
+| CCometixLine | 2,419 | Rust statusline + JSONL | Active (2 weeks ago) |
+| tokscale | 1,399 | JSONL across 15+ tools | Active (4 days ago) |
+| ccNexus | 810 | API proxy/gateway | Active (last week) |
+| claude-code-otel | 322 | OpenTelemetry | Stale (Jun 2025) |
 
 ---
 
