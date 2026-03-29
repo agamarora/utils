@@ -7,6 +7,7 @@ Claude panels on top (the soul), system panels below (the body).
 import sys
 import time
 
+import psutil
 from rich.console import Console, Group
 from rich.live import Live
 from rich.text import Text
@@ -111,7 +112,11 @@ def build_display(config: dict) -> Group:
     else:
         freq_str, avg_mhz = sys_collector.collect_cpu_freq()
 
-    throttled = bool(avg_mhz > 0 and avg_mhz < 2500 * 0.70)
+    # Throttle detection: compare current speed to psutil's reported max
+    # (avoids hardcoding a specific CPU's base clock)
+    base_freq = psutil.cpu_freq()
+    base_max = base_freq.max if base_freq and base_freq.max > 0 else 0
+    throttled = bool(base_max > 0 and avg_mhz > 0 and avg_mhz < base_max * 0.70)
     cpu_history = sys_collector.get_cpu_history()
     parts.append(build_cpu(avg_pct, cpu_history, width, freq_str, throttled))
 
@@ -119,8 +124,9 @@ def build_display(config: dict) -> Group:
     ram, swap = sys_collector.collect_memory()
     ram_lines = build_memory_lines(ram, swap)
 
+    # Collect GPU once, reuse for panel + temps
+    gpu_data = collect_gpu() if gpu_enabled else None
     if gpu_enabled:
-        gpu_data = collect_gpu()
         gpu_lines = build_gpu_lines(gpu_data)
         gpu_title = GPU_NAME[:20] if GPU_AVAILABLE else "GPU"
     else:
@@ -134,11 +140,9 @@ def build_display(config: dict) -> Group:
     lhm_temps = collect_temps_lhm()
     temps.update(lhm_temps)
 
-    # GPU temp from collector
-    if gpu_enabled:
-        gpu_data = collect_gpu()
-        if gpu_data and gpu_data.get("temp") is not None:
-            temps.setdefault("GPU", gpu_data["temp"])
+    # GPU temp from the single collect_gpu() call above
+    if gpu_data and gpu_data.get("temp") is not None:
+        temps.setdefault("GPU", gpu_data["temp"])
 
     parts.append(build_temps(temps, lhm_running=bool(lhm_temps)))
 

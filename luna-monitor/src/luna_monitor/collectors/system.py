@@ -141,11 +141,13 @@ def collect_temps_psutil() -> dict:
 def collect_processes(proc_count: int = 6) -> list[dict]:
     """Collect top processes. Returns list of process info dicts.
 
-    Includes cmdline for Claude process detection.
+    cmdline is fetched lazily in the process panel only for node processes
+    (needed for Claude process detection). Not fetched here to avoid the
+    cost of opening every process handle on Windows (~100-200ms).
     """
     skip = {"System Idle Process", "Idle", ""}
     procs = []
-    for p in psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent", "cmdline"]):
+    for p in psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent"]):
         try:
             if p.info.get("name") not in skip:
                 procs.append(p.info)

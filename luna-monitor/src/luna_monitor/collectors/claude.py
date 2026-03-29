@@ -126,11 +126,32 @@ _cache_ttl: float = 30.0  # seconds
 
 _usage_history: deque = deque(maxlen=300)  # (timestamp, utilization) pairs
 
+# Credential file cache — avoid reading disk every 2 seconds
+_cred_cache: tuple[dict | None, str | None] | None = None
+_cred_cache_time: float = 0.0
+_CRED_CACHE_TTL: float = 30.0  # re-read credentials file every 30s
+
 
 # ── Credential reading (matches Pulse's structure) ───────────
 
 def _read_credential_data() -> tuple[dict | None, str | None]:
-    """Read raw credential data from file or macOS Keychain. Returns (dict, source)."""
+    """Read raw credential data from file or macOS Keychain. Returns (dict, source).
+
+    Caches the result for _CRED_CACHE_TTL seconds to avoid disk I/O every 2s refresh.
+    """
+    global _cred_cache, _cred_cache_time
+    now = time.time()
+    if _cred_cache is not None and (now - _cred_cache_time) < _CRED_CACHE_TTL:
+        return _cred_cache
+
+    result = _read_credential_data_uncached()
+    _cred_cache = result
+    _cred_cache_time = now
+    return result
+
+
+def _read_credential_data_uncached() -> tuple[dict | None, str | None]:
+    """Actually read credentials from disk/keychain (no cache)."""
     # 1. File-based (~/.claude/.credentials.json)
     try:
         with open(CREDENTIALS_PATH, encoding="utf-8") as f:
@@ -270,6 +291,10 @@ def fetch_usage(cache_ttl: float | None = None) -> UsageData:
     if _cached_usage and (time.time() - _cached_usage.fetched_at) < ttl:
         return _cached_usage
 
+    # Reset retry count at entry (prevents stale state from prior calls)
+    if cache_ttl != 0:  # cache_ttl=0 is a retry call, don't reset
+        _retry_count = 0
+
     # Read token fresh from file every time
     token, plan = _get_fresh_token()
     if not token:
@@ -323,14 +348,12 @@ def fetch_usage(cache_ttl: float | None = None) -> UsageData:
             err = "Rate limited — will retry"
         else:
             err = f"API error ({e.code})"
-        _retry_count = 0
         if _cached_usage:
             _cached_usage.error = err
             return _cached_usage
         return UsageData(error=err)
 
     except (urllib.error.URLError, json.JSONDecodeError, OSError, ValueError):
-        _retry_count = 0
         err = "Network error — showing cached data" if _cached_usage else "Network error"
         if _cached_usage:
             _cached_usage.error = err
