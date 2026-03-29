@@ -11,22 +11,15 @@ from luna_monitor.config import load_config, DEFAULTS
 class TestLoadConfig:
     """load_config: loads JSON config with defaults fallback."""
 
-    # Patch luna config path to avoid reading real ~/.luna-monitor/config.json
-    _LUNA_PATCH = patch("luna_monitor.config._luna_config_path", return_value="/nonexistent/luna.json")
-
-    def setup_method(self):
-        self._luna_mock = self._LUNA_PATCH.start()
-
-    def teardown_method(self):
-        self._LUNA_PATCH.stop()
-
     def test_returns_defaults_when_no_file(self):
-        config = load_config()
+        with patch("luna_monitor.config._config_path", return_value="/nonexistent/config.json"):
+            config = load_config()
         for key, val in DEFAULTS.items():
             assert config[key] == val
 
     def test_defaults_are_correct_types(self):
-        config = load_config()
+        with patch("luna_monitor.config._config_path", return_value="/nonexistent/config.json"):
+            config = load_config()
         assert isinstance(config["refresh_seconds"], float)
         assert isinstance(config["cache_ttl_seconds"], int)
         assert isinstance(config["drives"], list)
@@ -88,3 +81,19 @@ class TestLoadConfig:
 
         assert config["custom_key"] == "hello"
         assert config["refresh_seconds"] == 2.0  # defaults still there
+
+    def test_proxy_keys_from_same_file(self, tmp_path):
+        """After consolidation, proxy settings come from the same file."""
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text(json.dumps({
+            "proxy_enabled": True,
+            "proxy_port": 9200,
+            "refresh_seconds": 3.0,
+        }))
+
+        with patch("luna_monitor.config._config_path", return_value=str(cfg_file)):
+            config = load_config()
+
+        assert config["proxy_enabled"] is True
+        assert config["proxy_port"] == 9200
+        assert config["refresh_seconds"] == 3.0

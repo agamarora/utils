@@ -74,9 +74,7 @@ def _authorized_request(url, token, headers=None, data=None, method=None, timeou
 
     Raises ValueError if domain not in allowlist.
     Uses redirect-blocking opener to prevent token exfiltration.
-    Sets socket-level timeout to enforce read timeout (not just connect).
     """
-    import socket
     domain = urlparse(url).hostname
     if domain not in _TOKEN_ALLOWED_DOMAINS:
         raise ValueError(f"Token request blocked: {domain} is not an allowed domain")
@@ -85,13 +83,7 @@ def _authorized_request(url, token, headers=None, data=None, method=None, timeou
         hdrs["Authorization"] = f"Bearer {token}"
     hdrs.setdefault("User-Agent", "luna-monitor/0.1.0")
     req = urllib.request.Request(url, headers=hdrs, data=data, method=method)
-    # Set default socket timeout to enforce read timeout, not just connect
-    old_timeout = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(timeout)
-    try:
-        return _safe_opener.open(req, timeout=timeout)
-    finally:
-        socket.setdefaulttimeout(old_timeout)
+    return _safe_opener.open(req, timeout=timeout)
 
 
 # ── Data types ───────────────────────────────────────────────

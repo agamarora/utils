@@ -34,6 +34,7 @@ _proxy_thread: threading.Thread | None = None
 _proxy_loop: asyncio.AbstractEventLoop | None = None
 _proxy_runner: object | None = None  # web.AppRunner
 _proxy_port: int = DEFAULT_PORT
+_last_start_error: str | None = None
 
 
 # ── Settings.json management ─────────────────────────────────
@@ -156,7 +157,7 @@ def recover_from_crash() -> bool:
 
 def _run_proxy_loop(port: int, target: str) -> None:
     """Entry point for the proxy daemon thread. Runs its own event loop."""
-    global _proxy_loop, _proxy_runner
+    global _proxy_loop, _proxy_runner, _last_start_error
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -182,8 +183,8 @@ def _run_proxy_loop(port: int, target: str) -> None:
 
     try:
         loop.run_until_complete(_start())
-    except Exception:
-        pass
+    except Exception as e:
+        _last_start_error = str(e)
     finally:
         loop.close()
         _proxy_loop = None
@@ -260,6 +261,11 @@ def is_proxy_healthy(port: int | None = None) -> bool:
 def get_proxy_port() -> int:
     """Return the port the proxy is running on."""
     return _proxy_port
+
+
+def get_last_error() -> str | None:
+    """Return the last proxy start error, if any."""
+    return _last_start_error
 
 
 # ── Cleanup handlers ─────────────────────────────────────────

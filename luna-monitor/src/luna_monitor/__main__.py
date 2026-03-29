@@ -184,6 +184,13 @@ def _setup_proxy(config: dict) -> None:
 
     port = config.get("proxy_port", 9120)
 
+    # Multi-instance guard: if another luna-monitor proxy is already running, piggyback
+    if lifecycle.is_proxy_healthy(port):
+        print(f"Another luna-monitor proxy detected on port {port}, reusing.")
+        config["_proxy_running"] = True
+        config["_proxy_port"] = port
+        return
+
     # Start proxy
     if lifecycle.start_proxy(port=port):
         actual_port = lifecycle.get_proxy_port()
@@ -197,7 +204,11 @@ def _setup_proxy(config: dict) -> None:
         from luna_monitor.proxy.watchdog import start_watchdog
         start_watchdog()
     else:
-        print("Warning: Could not start proxy. Running without live usage data.")
+        err = lifecycle.get_last_error()
+        msg = "Warning: Could not start proxy."
+        if err:
+            msg += f" ({err})"
+        print(msg + " Running without live usage data.")
         config["_proxy_running"] = False
 
 
@@ -216,6 +227,7 @@ def main():
         port = 9120
         write_proxy_setting(port)
         print(f"Proxy enabled. ANTHROPIC_BASE_URL set to http://127.0.0.1:{port}")
+        print("Note: proxy only runs while luna-monitor is active.")
         print("Run 'luna-monitor' to start the dashboard with live usage tracking.")
         return
 

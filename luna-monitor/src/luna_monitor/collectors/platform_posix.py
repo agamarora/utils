@@ -21,13 +21,13 @@ def collect_disk_active() -> dict:
     return {}
 
 
-def collect_temps_lhm() -> dict:
+def collect_temps() -> dict:
     return {}
 
 
-def get_lhm_clocks() -> dict:
+def get_clocks() -> dict:
     return {}
 
 
-def get_lhm_freq_str() -> tuple[str, float]:
+def get_freq_str() -> tuple[str, float]:
     return "", 0.0

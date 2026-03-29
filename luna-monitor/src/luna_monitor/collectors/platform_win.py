@@ -199,7 +199,7 @@ def _collect_temps_lhm() -> dict:
     return {}
 
 
-def collect_temps_lhm() -> dict:
+def collect_temps() -> dict:
     """Collect CPU temps: try WMI first, fall back to LHM HTTP server.
 
     Cached every LHM_REFRESH seconds regardless of source.
@@ -224,12 +224,12 @@ def collect_temps_lhm() -> dict:
     return _lhm_cache
 
 
-def get_lhm_clocks() -> dict:
-    """Return LHM clock speed data (populated by collect_temps_lhm)."""
+def get_clocks() -> dict:
+    """Return clock speed data (populated by collect_temps)."""
     return _lhm_clocks
 
 
-def get_lhm_freq_str() -> tuple[str, float]:
+def get_freq_str() -> tuple[str, float]:
     """Get formatted CPU frequency from LHM clocks. Returns (freq_str, avg_mhz)."""
     if _lhm_clocks:
         avg_mhz = sum(_lhm_clocks.values()) / len(_lhm_clocks)

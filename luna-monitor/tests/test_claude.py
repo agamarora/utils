@@ -200,6 +200,29 @@ class TestFormatResetTime:
         result = format_reset_time("2020-01-01T00:00:00Z")
         assert "0m" in result
 
+    def test_epoch_timestamp_future(self):
+        """Proxy sends reset timestamps as Unix epoch strings."""
+        from datetime import datetime, timezone, timedelta
+        future = datetime.now(timezone.utc) + timedelta(hours=3)
+        epoch_str = str(int(future.timestamp()))
+        result = format_reset_time(epoch_str)
+        assert "3h" in result or "2h" in result  # rounding
+
+    def test_epoch_timestamp_past(self):
+        result = format_reset_time("1000000001")  # 2001-09-09
+        assert "0m" in result
+
+    def test_epoch_too_small_returns_empty(self):
+        """Epoch < 1_000_000_000 (before 2001) is rejected."""
+        from luna_monitor.collectors.claude import _parse_reset_ts
+        assert _parse_reset_ts("999999999") is None
+
+    def test_epoch_float_string(self):
+        """Float epoch like '1774796400.5' should parse."""
+        from luna_monitor.collectors.claude import _parse_reset_ts
+        result = _parse_reset_ts("1774796400.5")
+        assert result is not None
+
 
 # ── Burndown prediction ─────────────────────────────────────
 
@@ -478,3 +501,83 @@ class TestExponentialBackoff:
 
         assert _claude_mod._backoff_step == 0
         assert _claude_mod._backoff_until == 0.0
+
+
+# ── Calibration logic (claude_burndown.py) ─────────────────
+
+class TestCalibration:
+    """Tests for burndown limit calibration: infer, guard, persist."""
+
+    def test_save_and_load_roundtrip(self, tmp_path):
+        from luna_monitor.panels.claude_burndown import (
+            _save_limit_to_disk, _load_limit_from_disk,
+        )
+        import luna_monitor.panels.claude_burndown as bd
+        bd._LIMITS_FILE = str(tmp_path / "limits.json")
+        bd._loaded_from_disk = False
+        bd._inferred_limit = None
+
+        _save_limit_to_disk(5_000_000.0)
+        bd._loaded_from_disk = False  # force re-read
+        bd._inferred_limit = None
+        _load_limit_from_disk()
+        assert bd._inferred_limit == 5_000_000.0
+
+    def test_load_missing_file(self, tmp_path):
+        import luna_monitor.panels.claude_burndown as bd
+        bd._LIMITS_FILE = str(tmp_path / "nonexistent.json")
+        bd._loaded_from_disk = False
+        bd._inferred_limit = None
+        _load = bd._load_limit_from_disk
+        _load()
+        assert bd._inferred_limit is None
+
+    def test_calibrate_happy_path(self, tmp_path):
+        import luna_monitor.panels.claude_burndown as bd
+        bd._LIMITS_FILE = str(tmp_path / "limits.json")
+        bd._inferred_limit = None
+        # 50% utilization with 2.5M tokens → limit should be 5M
+        bd._calibrate_limit(50.0, 2_500_000)
+        assert bd._inferred_limit is not None
+        assert abs(bd._inferred_limit - 5_000_000.0) < 1.0
+
+    def test_calibrate_ratio_guard_rejects_3x_swing(self, tmp_path):
+        import luna_monitor.panels.claude_burndown as bd
+        bd._LIMITS_FILE = str(tmp_path / "limits.json")
+        bd._inferred_limit = 5_000_000.0
+        # 10% utilization with 50M tokens → 500M limit (100x swing, rejected)
+        bd._calibrate_limit(10.0, 50_000_000)
+        assert bd._inferred_limit == 5_000_000.0  # unchanged
+
+    def test_calibrate_skips_low_utilization(self, tmp_path):
+        import luna_monitor.panels.claude_burndown as bd
+        bd._LIMITS_FILE = str(tmp_path / "limits.json")
+        bd._inferred_limit = None
+        # 5% utilization (below 10% threshold) → no calibration
+        bd._calibrate_limit(5.0, 250_000)
+        assert bd._inferred_limit is None
+
+    def test_estimate_with_known_limit(self, tmp_path):
+        import luna_monitor.panels.claude_burndown as bd
+        bd._LIMITS_FILE = str(tmp_path / "limits.json")
+        bd._loaded_from_disk = True
+        bd._inferred_limit = 10_000_000.0
+        result = bd._estimate_utilization(5_000_000)
+        assert result is not None
+        assert abs(result - 50.0) < 0.1
+
+    def test_estimate_returns_none_without_limit(self, tmp_path):
+        import luna_monitor.panels.claude_burndown as bd
+        bd._LIMITS_FILE = str(tmp_path / "limits.json")
+        bd._loaded_from_disk = True
+        bd._inferred_limit = None
+        result = bd._estimate_utilization(5_000_000)
+        assert result is None
+
+    def test_estimate_clamped_to_100(self, tmp_path):
+        import luna_monitor.panels.claude_burndown as bd
+        bd._LIMITS_FILE = str(tmp_path / "limits.json")
+        bd._loaded_from_disk = True
+        bd._inferred_limit = 1_000_000.0
+        result = bd._estimate_utilization(5_000_000)
+        assert result == 100.0
