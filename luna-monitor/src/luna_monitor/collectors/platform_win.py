@@ -160,6 +160,7 @@ def collect_temps_lhm() -> dict:
         if res.returncode == 0 and res.stdout.strip():
             root = json.loads(res.stdout)
             found: dict = {}
+            _lhm_clocks.clear()  # clear stale entries before re-parse
             _lhm_parse_node(root, found)
             _lhm_cache = found
     except Exception:

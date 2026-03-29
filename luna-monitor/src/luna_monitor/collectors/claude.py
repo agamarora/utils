@@ -74,7 +74,9 @@ def _authorized_request(url, token, headers=None, data=None, method=None, timeou
 
     Raises ValueError if domain not in allowlist.
     Uses redirect-blocking opener to prevent token exfiltration.
+    Sets socket-level timeout to enforce read timeout (not just connect).
     """
+    import socket
     domain = urlparse(url).hostname
     if domain not in _TOKEN_ALLOWED_DOMAINS:
         raise ValueError(f"Token request blocked: {domain} is not an allowed domain")
@@ -83,7 +85,13 @@ def _authorized_request(url, token, headers=None, data=None, method=None, timeou
         hdrs["Authorization"] = f"Bearer {token}"
     hdrs.setdefault("User-Agent", "luna-monitor/0.1.0")
     req = urllib.request.Request(url, headers=hdrs, data=data, method=method)
-    return _safe_opener.open(req, timeout=timeout)
+    # Set default socket timeout to enforce read timeout, not just connect
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(timeout)
+    try:
+        return _safe_opener.open(req, timeout=timeout)
+    finally:
+        socket.setdefaulttimeout(old_timeout)
 
 
 # ── Data types ───────────────────────────────────────────────
@@ -222,7 +230,7 @@ def get_credentials() -> tuple[str | None, str]:
     global _access_token, _plan
 
     # Try environment variable first
-    env_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    env_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
     if env_token:
         _access_token = env_token
         _plan = ""
@@ -362,11 +370,16 @@ def fetch_usage(cache_ttl: float | None = None) -> UsageData:
 
 
 def _parse_window(data: dict | None) -> UsageWindow:
-    """Parse a usage window from the API response. Handles None gracefully."""
+    """Parse a usage window from the API response. Handles None gracefully.
+
+    Clamps utilization to [0.0, 1.0] to prevent negative ETAs from
+    out-of-range API values.
+    """
     if not data:
         return UsageWindow()
+    raw_util = float(data.get("utilization", 0.0))
     return UsageWindow(
-        utilization=float(data.get("utilization", 0.0)),
+        utilization=max(0.0, min(1.0, raw_util)),
         resets_at=str(data.get("resets_at", "")),
     )
 
@@ -391,6 +404,17 @@ def predict_burndown() -> BurndownPrediction:
     if len(points) < 3:
         return BurndownPrediction(label="Collecting data...", confidence="low")
 
+    # Detect time gaps (hibernate/sleep) — discard points with >5min gaps
+    filtered = [points[0]]
+    for i in range(1, len(points)):
+        if points[i][0] - points[i - 1][0] > 300:  # 5 minute gap
+            filtered = [points[i]]  # restart from after the gap
+        else:
+            filtered.append(points[i])
+    points = filtered
+    if len(points) < 3:
+        return BurndownPrediction(label="Collecting data...", confidence="low")
+
     # Linear regression: y = mx + b
     n = len(points)
     t0 = points[0][0]
@@ -409,7 +433,9 @@ def predict_burndown() -> BurndownPrediction:
     slope = (n * sum_xy - sum_x * sum_y) / denom
 
     if slope <= 0:
-        if slope < -0.001:
+        # Only clear history on a real reset (large drop, not rounding artifacts)
+        # -0.01 utilization/second = dropping 1% per second, clearly a reset
+        if slope < -0.01:
             _usage_history.clear()
             return BurndownPrediction(label="Usage reset detected", confidence="low")
         return BurndownPrediction(label="Pace: sustainable", confidence="medium")
