@@ -289,10 +289,10 @@ class TestErrorHandling:
 
         original_read_file = _local_mod._read_file
 
-        def raise_perm(path, cutoff, messages):
+        def raise_perm(path, cutoff, messages, seen_keys):
             if path.name == "unreadable.jsonl":
                 raise PermissionError("no access")
-            return original_read_file(path, cutoff, messages)
+            return original_read_file(path, cutoff, messages, seen_keys)
 
         with patch.object(_local_mod, "CLAUDE_PROJECTS_DIR", tmp_path):
             with patch.object(_local_mod, "_read_file", side_effect=raise_perm):
@@ -377,6 +377,98 @@ class TestBurnRate:
             result = collect(cache_ttl=0)
         # 1000 * 0.1 = 100 weighted tokens / 10 min = 10 tok/min
         assert result.burn_rate == pytest.approx(10.0)
+
+
+class TestStreamingDeduplication:
+    """Claude Code logs streaming responses multiple times (same requestId+messageId).
+    We must deduplicate to match ccusage and avoid 1.75x+ over-counting."""
+
+    def test_duplicate_request_id_counted_once(self, tmp_path):
+        """Same requestId+messageId appearing multiple times → counted once."""
+        f = tmp_path / "session.jsonl"
+        entry_partial = json.dumps({
+            "timestamp": _now_iso(),
+            "requestId": "req_abc123",
+            "message": {
+                "id": "msg_xyz789",
+                "model": "claude-sonnet-4-6",
+                "usage": {"input_tokens": 5, "cache_read_input_tokens": 100_000,
+                          "cache_creation_input_tokens": 0, "output_tokens": 10},
+            },
+        })
+        entry_final = json.dumps({
+            "timestamp": _now_iso(),
+            "requestId": "req_abc123",
+            "message": {
+                "id": "msg_xyz789",
+                "model": "claude-sonnet-4-6",
+                "usage": {"input_tokens": 5, "cache_read_input_tokens": 100_000,
+                          "cache_creation_input_tokens": 0, "output_tokens": 500},
+            },
+        })
+        # Write the same request twice (partial then final, as Claude Code does during streaming)
+        f.write_text(entry_partial + "\n" + entry_final)
+
+        with patch.object(_local_mod, "CLAUDE_PROJECTS_DIR", tmp_path):
+            result = collect(cache_ttl=0)
+
+        # Should count only FIRST occurrence: 5 + 100_000*0.1 + 10 = 10_015 weighted
+        expected = 5 + 100_000 * 0.1 + 10  # first occurrence output=10, not 500
+        assert result.tokens_5h == int(expected)
+
+    def test_no_ids_not_deduplicated(self, tmp_path):
+        """Entries without requestId or messageId are never deduplicated (safe fallback)."""
+        f = tmp_path / "session.jsonl"
+        lines = [
+            _make_entry(_now_iso(), "claude-sonnet-4-6", input_tokens=100),
+            _make_entry(_now_iso(), "claude-sonnet-4-6", input_tokens=100),
+        ]
+        f.write_text("\n".join(lines))
+
+        with patch.object(_local_mod, "CLAUDE_PROJECTS_DIR", tmp_path):
+            result = collect(cache_ttl=0)
+        # Both entries counted (no ids → no dedup key → both pass)
+        assert result.tokens_5h == 200
+
+    def test_different_request_ids_both_counted(self, tmp_path):
+        """Two distinct requests are both counted even if close in time."""
+        f = tmp_path / "session.jsonl"
+        lines = [
+            json.dumps({"timestamp": _now_iso(), "requestId": "req_aaa",
+                        "message": {"id": "msg_aaa", "model": "claude-opus-4-6",
+                                    "usage": {"input_tokens": 100, "output_tokens": 0,
+                                              "cache_creation_input_tokens": 0,
+                                              "cache_read_input_tokens": 0}}}),
+            json.dumps({"timestamp": _now_iso(), "requestId": "req_bbb",
+                        "message": {"id": "msg_bbb", "model": "claude-opus-4-6",
+                                    "usage": {"input_tokens": 200, "output_tokens": 0,
+                                              "cache_creation_input_tokens": 0,
+                                              "cache_read_input_tokens": 0}}}),
+        ]
+        f.write_text("\n".join(lines))
+
+        with patch.object(_local_mod, "CLAUDE_PROJECTS_DIR", tmp_path):
+            result = collect(cache_ttl=0)
+        assert result.tokens_5h == 300  # 100 + 200, both counted
+
+    def test_cross_file_dedup(self, tmp_path):
+        """Same requestId+messageId in two different session files → counted once."""
+        entry = json.dumps({
+            "timestamp": _now_iso(),
+            "requestId": "req_shared",
+            "message": {
+                "id": "msg_shared",
+                "model": "claude-sonnet-4-6",
+                "usage": {"input_tokens": 500, "output_tokens": 0,
+                          "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0},
+            },
+        })
+        (tmp_path / "session_a.jsonl").write_text(entry)
+        (tmp_path / "session_b.jsonl").write_text(entry)
+
+        with patch.object(_local_mod, "CLAUDE_PROJECTS_DIR", tmp_path):
+            result = collect(cache_ttl=0)
+        assert result.tokens_5h == 500  # counted once, not twice
 
 
 class TestModelBreakdown:
