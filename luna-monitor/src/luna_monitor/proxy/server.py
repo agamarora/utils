@@ -49,6 +49,11 @@ _start_time: float = 0.0
 _requests_proxied: int = 0
 _last_capture_ts: str = ""
 
+# API health tracking
+_errors_total: int = 0       # upstream 4xx/5xx count
+_errors_429: int = 0         # rate limit errors specifically
+_last_latency_ms: float = 0  # most recent request latency
+
 
 # ── JSONL writer ─────────────────────────────────────────────
 
@@ -110,10 +115,11 @@ def _capture_headers(resp_headers: dict) -> dict | None:
 
 async def _proxy_handler(request: web.Request) -> web.StreamResponse:
     """Forward request to upstream and stream response back, capturing rate limit headers."""
-    global _requests_proxied, _last_capture_ts
+    global _requests_proxied, _last_capture_ts, _errors_total, _errors_429, _last_latency_ms
 
     target_url = request.app["target"] + request.path_qs
     _requests_proxied += 1
+    req_start = time.time()
 
     # Read request body
     body = await request.read()
@@ -133,6 +139,14 @@ async def _proxy_handler(request: web.Request) -> web.StreamResponse:
             allow_redirects=False,
             timeout=aiohttp.ClientTimeout(total=300),
         ) as upstream_resp:
+            _last_latency_ms = (time.time() - req_start) * 1000
+
+            # Track upstream errors
+            if upstream_resp.status >= 400:
+                _errors_total += 1
+            if upstream_resp.status == 429:
+                _errors_429 += 1
+
             # Capture rate limit headers
             captured = _capture_headers(upstream_resp.headers)
             if captured:
@@ -167,12 +181,15 @@ async def _proxy_handler(request: web.Request) -> web.StreamResponse:
 # ── Health endpoint ──────────────────────────────────────────
 
 async def _health_handler(request: web.Request) -> web.Response:
-    """Return proxy health status."""
+    """Return proxy and upstream API health status."""
     return web.json_response({
         "status": "ok",
         "uptime_s": int(time.time() - _start_time),
         "requests_proxied": _requests_proxied,
         "last_capture_ts": _last_capture_ts,
+        "api_errors_total": _errors_total,
+        "api_errors_429": _errors_429,
+        "last_latency_ms": round(_last_latency_ms, 1),
     })
 
 

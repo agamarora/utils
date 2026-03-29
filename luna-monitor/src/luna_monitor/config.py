@@ -10,6 +10,8 @@ DEFAULTS = {
     "drives": ["C:\\", "D:\\"],
     "gpu_enabled": True,
     "claude_enabled": True,
+    "proxy_enabled": None,  # None = not yet decided, True/False = user choice
+    "proxy_port": 9120,
 }
 
 
@@ -36,6 +38,21 @@ def load_config() -> dict:
             user = json.load(f)
         if isinstance(user, dict):
             config.update(user)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+
+    # Also read luna-monitor-specific config (proxy settings etc.)
+    luna_config_path = os.path.join(
+        os.path.expanduser("~"), ".luna-monitor", "config.json"
+    )
+    try:
+        with open(luna_config_path, encoding="utf-8") as f:
+            luna = json.load(f)
+        if isinstance(luna, dict):
+            # Only merge luna-monitor specific keys
+            for key in ("proxy_enabled", "proxy_port"):
+                if key in luna:
+                    config[key] = luna[key]
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         pass
 
