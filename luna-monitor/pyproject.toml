@@ -32,6 +32,7 @@ dependencies = [
 
 [project.optional-dependencies]
 gpu = ["pynvml>=11.0"]
+temps = ["wmi>=1.5"]
 
 [project.scripts]
 luna-monitor = "luna_monitor.__main__:main"
