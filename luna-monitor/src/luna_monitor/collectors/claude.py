@@ -494,6 +494,10 @@ def format_reset_time(iso_str: str) -> str:
         now = datetime.now(timezone.utc)
         delta = dt - now
         total_min = max(0, int(delta.total_seconds() / 60))
+        if total_min >= 1440:  # >= 24 hours, show days
+            days = total_min // 1440
+            hours = (total_min % 1440) // 60
+            return f"resets in {days}d {hours}h"
         if total_min >= 60:
             hours = total_min // 60
             mins = total_min % 60
