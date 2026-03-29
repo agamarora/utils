@@ -383,6 +383,16 @@ class TestExponentialBackoff:
         _claude_mod._backoff_until = 0.0
         _claude_mod._cached_usage = None
         _claude_mod._retry_count = 0
+        # Disable proxy shortcut so tests go through API path
+        self._proxy_patch = patch("luna_monitor.collectors.claude._try_proxy_data", return_value=None)
+        self._proxy_patch.start()
+        # Disable disk cache so cold start doesn't short-circuit
+        self._disk_patch = patch("luna_monitor.collectors.claude._read_disk_cache", return_value=None)
+        self._disk_patch.start()
+
+    def teardown_method(self):
+        self._proxy_patch.stop()
+        self._disk_patch.stop()
 
     def test_backoff_steps_defined(self):
         assert _BACKOFF_STEPS == [30.0, 60.0, 120.0, 300.0]
