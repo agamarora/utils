@@ -4,18 +4,24 @@ Your system + Claude Code usage in one terminal. The dashboard every Claude Code
 
 ![Python](https://img.shields.io/badge/python-3.10+-blue) ![Windows](https://img.shields.io/badge/platform-Windows-lightgrey) ![License](https://img.shields.io/badge/license-MIT-green)
 
-## One-Command Install
+## Install
 
-Paste this into your Claude Code terminal and let it handle everything:
-
+**pip (recommended):**
+```bash
+pip install luna-monitor
+luna-monitor
 ```
-Clone the luna-monitor tool from https://github.com/agamarora/utils, cd into luna-monitor, install it with pip install -e ., and run luna-monitor to verify it works. If there are any errors, fix them. Show me the output.
+
+**Standalone .exe (no Python needed):**
+Download `luna-monitor.exe` from the [latest release](https://github.com/agamarora/utils/releases/latest) and run it.
+
+**Claude Code one-liner:**
+Paste this into your Claude Code terminal:
+```
+Clone the luna-monitor tool from https://github.com/agamarora/utils, cd into luna-monitor, install it with pip install luna-monitor, and run luna-monitor to verify it works. If there are any errors, fix them. Show me the output.
 ```
 
-That's it. Claude Code will clone, install, and verify. You'll see the dashboard in seconds.
-
-## Manual Install
-
+**From source:**
 ```bash
 git clone https://github.com/agamarora/utils.git
 cd utils/luna-monitor
@@ -23,15 +29,7 @@ pip install --user -e .
 luna-monitor
 ```
 
-Or if you already have the repo:
-
-```bash
-cd luna-monitor
-pip install --user -e .
-luna-monitor
-```
-
-> **Windows note:** Use `pip install --user -e .` (with `--user`) to avoid permission errors on system Python. If `luna-monitor` isn't found after install, use `python -m luna_monitor` instead.
+> **Windows note:** If `luna-monitor` isn't found after install, use `python -m luna_monitor` instead.
 
 ## What You Get
 
