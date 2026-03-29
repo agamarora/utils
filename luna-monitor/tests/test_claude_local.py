@@ -356,16 +356,27 @@ class TestBurnRate:
             result = collect(cache_ttl=0)
         assert result.burn_rate == 0.0
 
-    def test_burn_rate_computed_over_10min_window(self, tmp_path):
-        """Tokens in last 10min / 10 = burn_rate."""
+    def test_burn_rate_computed_over_2min_window(self, tmp_path):
+        """Tokens in last 2min / 2 = burn_rate (responsive to idle)."""
         f = tmp_path / "session.jsonl"
-        # 600 input tokens from 5 minutes ago
+        # 600 input tokens from 60 seconds ago (within 2-min window)
+        f.write_text(_make_entry(_ago_iso(60), "claude-opus-4-6", input_tokens=600))
+
+        with patch.object(_local_mod, "CLAUDE_PROJECTS_DIR", tmp_path):
+            result = collect(cache_ttl=0)
+        # 600 tokens / 2 min = 300 tok/min
+        assert result.burn_rate == pytest.approx(300.0)
+
+    def test_burn_rate_drops_when_idle(self, tmp_path):
+        """Messages older than 2 min don't contribute to burn rate."""
+        f = tmp_path / "session.jsonl"
+        # 600 input tokens from 5 minutes ago (outside 2-min window)
         f.write_text(_make_entry(_ago_iso(5 * 60), "claude-opus-4-6", input_tokens=600))
 
         with patch.object(_local_mod, "CLAUDE_PROJECTS_DIR", tmp_path):
             result = collect(cache_ttl=0)
-        # 600 tokens / 10 min = 60 tok/min
-        assert result.burn_rate == pytest.approx(60.0)
+        # Outside 2-min window → burn_rate = 0
+        assert result.burn_rate == 0.0
 
     def test_cache_read_excluded_from_burn_rate(self, tmp_path):
         """cache_read_input_tokens are 0-weighted — don't contribute to burn rate."""
