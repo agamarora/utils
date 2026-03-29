@@ -27,9 +27,9 @@ def build_claude_burndown(
         prediction: BurndownPrediction from predict_burndown().
         console_width: Terminal width for chart sizing.
     """
-    # Convert utilization (0-1) to percentage (0-100) for the chart
+    # Utilization is already 0-100 from the API — use directly
     pct_history = deque(
-        (u * 100 for _, u in usage_history),
+        (u for _, u in usage_history),
         maxlen=usage_history.maxlen or 300,
     )
 

@@ -135,8 +135,8 @@ class TestDomainAllowlist:
 
 class TestParseWindow:
     def test_valid_window(self):
-        w = _parse_window({"utilization": 0.45, "resets_at": "2026-03-30T00:00:00Z"})
-        assert w.utilization == 0.45
+        w = _parse_window({"utilization": 45.0, "resets_at": "2026-03-30T00:00:00Z"})
+        assert w.utilization == 45.0
         assert w.resets_at == "2026-03-30T00:00:00Z"
 
     def test_empty_window(self):
@@ -145,8 +145,8 @@ class TestParseWindow:
         assert w.resets_at == ""
 
     def test_missing_fields(self):
-        w = _parse_window({"utilization": 0.12})
-        assert w.utilization == 0.12
+        w = _parse_window({"utilization": 12.0})
+        assert w.utilization == 12.0
         assert w.resets_at == ""
 
 
@@ -210,34 +210,34 @@ class TestBurndownPrediction:
         assert p.label == "Collecting data..."
 
     def test_one_point(self):
-        _usage_history.append((time.time(), 0.1))
+        _usage_history.append((time.time(), 10.0))
         p = predict_burndown()
         assert "Collecting" in p.label
 
     def test_two_points(self):
-        _usage_history.append((time.time() - 60, 0.1))
-        _usage_history.append((time.time(), 0.2))
+        _usage_history.append((time.time() - 60, 10.0))
+        _usage_history.append((time.time(), 20.0))
         p = predict_burndown()
         assert "Collecting" in p.label  # need >= 3 for regression
 
     def test_flat_usage(self):
         now = time.time()
         for i in range(10):
-            _usage_history.append((now + i * 30, 0.5))
+            _usage_history.append((now + i * 30, 50.0))
         p = predict_burndown()
         assert "sustainable" in p.label.lower()
 
     def test_increasing_usage_shows_minutes(self):
         now = time.time()
         for i in range(10):
-            _usage_history.append((now + i * 30, 0.1 + i * 0.05))
+            _usage_history.append((now + i * 30, 10.0 + i * 5.0))
         p = predict_burndown()
         assert p.minutes_remaining is not None or "sustainable" in p.label.lower()
 
     def test_usage_at_100_shows_limit_reached(self):
         now = time.time()
         for i in range(10):
-            _usage_history.append((now + i * 30, 0.9 + i * 0.02))
+            _usage_history.append((now + i * 30, 90.0 + i * 2.0))
         p = predict_burndown()
         # Should either show "Limit reached" or a very short time
         assert p.minutes_remaining is not None or "sustainable" in p.label.lower()
@@ -245,7 +245,7 @@ class TestBurndownPrediction:
     def test_decreasing_usage_resets(self):
         now = time.time()
         for i in range(5):
-            _usage_history.append((now + i * 30, 0.8 - i * 0.2))
+            _usage_history.append((now + i * 30, 80.0 - i * 20.0))
         p = predict_burndown()
         # Should detect reset or show sustainable
         assert "reset" in p.label.lower() or "sustainable" in p.label.lower()
@@ -253,7 +253,7 @@ class TestBurndownPrediction:
     def test_high_confidence_with_many_points(self):
         now = time.time()
         for i in range(10):
-            _usage_history.append((now + i * 30, 0.1 + i * 0.03))
+            _usage_history.append((now + i * 30, 10.0 + i * 3.0))
         p = predict_burndown()
         if p.minutes_remaining is not None:
             assert p.confidence in ("medium", "high")
@@ -268,8 +268,8 @@ class TestClaudeStatusPanel:
     def test_render_with_data(self):
         from luna_monitor.panels.claude_status import build_claude_status
         usage = UsageData(
-            five_hour=UsageWindow(utilization=0.45, resets_at="2026-03-30T00:00:00Z"),
-            seven_day=UsageWindow(utilization=0.30, resets_at="2026-04-05T00:00:00Z"),
+            five_hour=UsageWindow(utilization=45.0, resets_at="2026-03-30T00:00:00Z"),
+            seven_day=UsageWindow(utilization=30.0, resets_at="2026-04-05T00:00:00Z"),
             plan="Pro",
             fetched_at=time.time(),
         )
@@ -285,8 +285,8 @@ class TestClaudeStatusPanel:
     def test_render_with_stale_data(self):
         from luna_monitor.panels.claude_status import build_claude_status
         usage = UsageData(
-            five_hour=UsageWindow(utilization=0.60),
-            seven_day=UsageWindow(utilization=0.40),
+            five_hour=UsageWindow(utilization=60.0),
+            seven_day=UsageWindow(utilization=40.0),
             fetched_at=time.time() - 120,
             error="Network error — showing cached data",
         )
@@ -296,10 +296,10 @@ class TestClaudeStatusPanel:
     def test_render_with_model_breakdown(self):
         from luna_monitor.panels.claude_status import build_claude_status
         usage = UsageData(
-            five_hour=UsageWindow(utilization=0.50),
-            seven_day=UsageWindow(utilization=0.35),
-            seven_day_opus=UsageWindow(utilization=0.25),
-            seven_day_sonnet=UsageWindow(utilization=0.10),
+            five_hour=UsageWindow(utilization=50.0),
+            seven_day=UsageWindow(utilization=35.0),
+            seven_day_opus=UsageWindow(utilization=25.0),
+            seven_day_sonnet=UsageWindow(utilization=10.0),
             plan="Max 5x",
             fetched_at=time.time(),
         )
@@ -309,8 +309,8 @@ class TestClaudeStatusPanel:
     def test_render_high_usage(self):
         from luna_monitor.panels.claude_status import build_claude_status
         usage = UsageData(
-            five_hour=UsageWindow(utilization=0.95),
-            seven_day=UsageWindow(utilization=0.88),
+            five_hour=UsageWindow(utilization=95.0),
+            seven_day=UsageWindow(utilization=88.0),
             plan="Pro",
             fetched_at=time.time(),
         )
@@ -320,8 +320,8 @@ class TestClaudeStatusPanel:
     def test_claude_border_style(self):
         from luna_monitor.panels.claude_status import build_claude_status
         usage = UsageData(
-            five_hour=UsageWindow(utilization=0.50),
-            seven_day=UsageWindow(utilization=0.30),
+            five_hour=UsageWindow(utilization=50.0),
+            seven_day=UsageWindow(utilization=30.0),
             fetched_at=time.time(),
         )
         result = build_claude_status(usage)
@@ -341,7 +341,7 @@ class TestClaudeBurndownPanel:
         history = deque(maxlen=300)
         now = time.time()
         for i in range(20):
-            history.append((now + i * 30, 0.1 + i * 0.02))
+            history.append((now + i * 30, 10.0 + i * 2.0))
         prediction = BurndownPrediction(
             minutes_remaining=45,
             label="~45 min remaining (estimated)",
@@ -355,7 +355,7 @@ class TestClaudeBurndownPanel:
         history = deque(maxlen=300)
         now = time.time()
         for i in range(10):
-            history.append((now + i * 30, 0.3))
+            history.append((now + i * 30, 30.0))
         prediction = BurndownPrediction(label="Pace: sustainable", confidence="medium")
         result = build_claude_burndown(history, prediction, console_width=80)
         assert isinstance(result, Panel)
@@ -365,7 +365,7 @@ class TestClaudeBurndownPanel:
         history = deque(maxlen=300)
         now = time.time()
         for i in range(5):
-            history.append((now + i * 30, 0.5))
+            history.append((now + i * 30, 50.0))
         prediction = BurndownPrediction(label="Pace: sustainable")
         result = build_claude_burndown(history, prediction, console_width=80)
         assert result.border_style == "cyan"  # Claude panel border
@@ -375,7 +375,7 @@ class TestClaudeBurndownPanel:
         history = deque(maxlen=300)
         now = time.time()
         for i in range(5):
-            history.append((now + i * 30, 0.3 + i * 0.1))
+            history.append((now + i * 30, 30.0 + i * 10.0))
         prediction = BurndownPrediction(label="~30 min remaining (estimated)")
         result = build_claude_burndown(history, prediction, console_width=30)
         assert isinstance(result, Panel)

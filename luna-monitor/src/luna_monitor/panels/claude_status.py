@@ -32,8 +32,8 @@ def build_claude_status(usage: UsageData) -> object:
     if usage.plan:
         lines.append(Text(f"Plan: {usage.plan}", style="bold white"))
 
-    # 5-hour session usage
-    pct_5h = usage.five_hour.utilization * 100
+    # 5-hour session usage (utilization is already 0-100 from API)
+    pct_5h = usage.five_hour.utilization
     row = Text()
     row.append("Session  ", style="dim")
     row.append_text(hbar(pct_5h))
@@ -44,7 +44,7 @@ def build_claude_status(usage: UsageData) -> object:
     lines.append(row)
 
     # 7-day weekly usage
-    pct_7d = usage.seven_day.utilization * 100
+    pct_7d = usage.seven_day.utilization
     row = Text()
     row.append("Weekly   ", style="dim")
     row.append_text(hbar(pct_7d))
@@ -56,8 +56,8 @@ def build_claude_status(usage: UsageData) -> object:
 
     # Per-model breakdown (if available)
     if usage.seven_day_opus.utilization > 0 or usage.seven_day_sonnet.utilization > 0:
-        opus_pct = usage.seven_day_opus.utilization * 100
-        sonnet_pct = usage.seven_day_sonnet.utilization * 100
+        opus_pct = usage.seven_day_opus.utilization
+        sonnet_pct = usage.seven_day_sonnet.utilization
         breakdown = Text()
         breakdown.append("         ", style="dim")
         breakdown.append(f"Opus {opus_pct:.0f}%", style="dim")
