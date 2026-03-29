@@ -238,32 +238,40 @@ def refresh_and_retry() -> tuple[str | None, str]:
     return _access_token, _plan
 
 
-def _ensure_valid_token() -> str | None:
-    """Ensure we have a valid access token. Returns token or None."""
-    global _access_token
-    if not _access_token:
-        token, _ = get_credentials()
-        if not token:
-            return None
-    return _access_token
+def _get_fresh_token() -> tuple[str | None, str]:
+    """Read token fresh from credentials file every time (like Pulse does).
+
+    Claude Code manages the credentials file and keeps it updated.
+    We piggyback on that rather than caching tokens in memory.
+    """
+    global _access_token, _plan
+    token, plan = get_credentials()
+    if token:
+        _access_token = token
+        _plan = plan
+    return token, plan
 
 
 # ── Usage API ────────────────────────────────────────────────
 
+_retry_count = 0  # prevent infinite retry loops
+
 def fetch_usage(cache_ttl: float | None = None) -> UsageData:
     """Fetch Claude usage data from the Anthropic API.
 
+    Reads token fresh from credentials file every call (same as Pulse).
     Returns cached data if within TTL. On error, returns last cached data
     with an error message, or a fresh UsageData with error set.
     """
-    global _cached_usage
+    global _cached_usage, _retry_count
     ttl = cache_ttl if cache_ttl is not None else _cache_ttl
 
     # Return cache if fresh
     if _cached_usage and (time.time() - _cached_usage.fetched_at) < ttl:
         return _cached_usage
 
-    token = _ensure_valid_token()
+    # Read token fresh from file every time
+    token, plan = _get_fresh_token()
     if not token:
         if _cached_usage:
             _cached_usage.error = "Token unavailable — showing cached data"
@@ -278,6 +286,8 @@ def fetch_usage(cache_ttl: float | None = None) -> UsageData:
         ) as resp:
             body = json.loads(resp.read(1_000_000))  # 1 MB max
 
+        _retry_count = 0  # reset on success
+
         # Schema version check
         if not _EXPECTED_SCHEMA_KEYS.issubset(body.keys()):
             if _cached_usage:
@@ -288,10 +298,10 @@ def fetch_usage(cache_ttl: float | None = None) -> UsageData:
         usage = UsageData(
             five_hour=_parse_window(body.get("five_hour", {})),
             seven_day=_parse_window(body.get("seven_day", {})),
-            seven_day_opus=_parse_window(body.get("seven_day_opus", {})),
-            seven_day_sonnet=_parse_window(body.get("seven_day_sonnet", {})),
+            seven_day_opus=_parse_window(body.get("seven_day_opus")),
+            seven_day_sonnet=_parse_window(body.get("seven_day_sonnet")),
             extra_usage=body.get("extra_usage", {}),
-            plan=_plan,
+            plan=plan,
             fetched_at=time.time(),
         )
 
@@ -302,21 +312,25 @@ def fetch_usage(cache_ttl: float | None = None) -> UsageData:
         return usage
 
     except urllib.error.HTTPError as e:
-        if e.code == 401:
-            # Token expired — try refresh
+        if e.code == 401 and _retry_count < 1:
+            # Token expired — try refresh once
+            _retry_count += 1
             new_token, _ = refresh_and_retry()
             if new_token:
-                # Retry once with refreshed token
                 return fetch_usage(cache_ttl=0)  # bypass cache for retry
             err = "Re-authenticate Claude Code"
+        elif e.code == 429:
+            err = "Rate limited — will retry"
         else:
             err = f"API error ({e.code})"
+        _retry_count = 0
         if _cached_usage:
             _cached_usage.error = err
             return _cached_usage
         return UsageData(error=err)
 
     except (urllib.error.URLError, json.JSONDecodeError, OSError, ValueError):
+        _retry_count = 0
         err = "Network error — showing cached data" if _cached_usage else "Network error"
         if _cached_usage:
             _cached_usage.error = err

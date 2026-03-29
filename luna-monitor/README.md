@@ -98,6 +98,44 @@ Optional. Create `%APPDATA%/luna-monitor/config.json`:
 
 Everything has sensible defaults. Most people never need this file.
 
+## Add as a Terminal Profile (always one click away)
+
+### Windows Terminal
+
+Open Settings (Ctrl+,) > Add a new profile > New empty profile:
+
+- **Name:** Luna Monitor
+- **Command line:** `python -m luna_monitor`
+- **Starting directory:** `%USERPROFILE%`
+- **Icon:** pick any moon/monitor emoji or leave default
+
+Now luna-monitor is always one click away in your terminal dropdown.
+
+### Launcher Scripts (optional)
+
+If you want a simple shortcut you can double-click or pin to taskbar:
+
+**PowerShell (`luna.ps1`):**
+```powershell
+# Save this as luna.ps1 anywhere, right-click > Run with PowerShell
+python -m luna_monitor
+```
+
+**Bash (`luna.sh`):**
+```bash
+#!/bin/bash
+# Save this as luna.sh, chmod +x luna.sh
+python -m luna_monitor "$@"
+```
+
+**Windows Batch (`luna.bat`):**
+```batch
+@echo off
+python -m luna_monitor %*
+```
+
+Drop any of these in a folder on your PATH and you can just type `luna` from anywhere.
+
 ## Platform
 
 Windows-first. The architecture separates all Windows-specific code (`platform_win.py`) behind a clean abstraction. Linux/macOS stubs exist — real implementations coming in v2.
