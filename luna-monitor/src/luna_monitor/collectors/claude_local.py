@@ -18,11 +18,11 @@ JSONL line format (confirmed from sampling, March 2026):
     }
   }
 
-Token weighting (matches ccusage):
-  input_tokens                  1.0x  (full cost)
-  cache_creation_input_tokens   1.0x  (full cost — expensive to create)
-  cache_read_input_tokens       0.1x  (cheap — barely counts)
-  output_tokens                 1.0x  (full cost)
+Token weighting (quota-relevant, excludes cache reads):
+  input_tokens                  1.0x  (new content entering the system)
+  cache_creation_input_tokens   1.0x  (loading files into cache)
+  cache_read_input_tokens       0.0x  (excluded — re-reads of existing context)
+  output_tokens                 1.0x  (what Claude actually wrote)
 
 Subagent files (subagents/*.jsonl) are excluded — they represent sub-calls
 from parent sessions and would double-count tokens if included.
@@ -45,10 +45,12 @@ _WINDOW_5H: float = 5 * 3600  # seconds
 _WINDOW_7D: float = 7 * 86400  # seconds
 _WINDOW_10M: float = 10 * 60   # seconds — burn rate window
 
-# Token weighting coefficients (matches ccusage)
+# Token weighting: exclude cache_read (re-reads of existing context, not new consumption)
+# Cache reads inflate numbers massively (106M raw in a 5h session) without representing
+# real quota usage. Input + cache_create + output = "new work done."
 _W_INPUT: float = 1.0
 _W_CACHE_CREATE: float = 1.0
-_W_CACHE_READ: float = 0.1
+_W_CACHE_READ: float = 0.0
 _W_OUTPUT: float = 1.0
 
 # Human-readable model name prefixes
@@ -66,7 +68,8 @@ class LocalUsageData:
     """Token usage stats derived from local JSONL files."""
     tokens_5h: int = 0
     tokens_7d: int = 0
-    burn_rate: float = 0.0           # tokens/min over last 10 min
+    requests_5h: int = 0             # deduped API call count in last 5h
+    burn_rate: float = 0.0           # tokens/min over last 10 min (excl. cache_read)
     model_breakdown: dict = field(default_factory=dict)  # model_key → int tokens
     collected_at: float = 0.0
 
@@ -206,6 +209,9 @@ def _scan_files(now: float) -> LocalUsageData:
     tokens_10m = sum(wt for ts, wt, _ in messages if ts >= cutoff_10m)
     burn_rate = tokens_10m / 10.0  # tokens per minute (average over 10min window)
 
+    # Request count: number of distinct API calls in the 5h window
+    requests_5h = sum(1 for ts, _, _ in messages if ts >= cutoff_5h)
+
     # Model breakdown: sum weighted tokens per model
     model_breakdown: dict[str, int] = {}
     for _, wt, model in messages:
@@ -214,6 +220,7 @@ def _scan_files(now: float) -> LocalUsageData:
     return LocalUsageData(
         tokens_5h=tokens_5h,
         tokens_7d=tokens_7d,
+        requests_5h=requests_5h,
         burn_rate=burn_rate,
         model_breakdown=model_breakdown,
         collected_at=now,

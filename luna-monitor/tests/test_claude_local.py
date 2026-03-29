@@ -24,7 +24,7 @@ from luna_monitor.collectors.claude_local import (
     _parse_ts,
     _scan_files,
 )
-from luna_monitor.panels.claude_burndown import build_claude_burndown, _format_breakdown
+from luna_monitor.panels.claude_burndown import build_claude_burndown
 
 
 # ── Helpers ──────────────────────────────────────────────────
@@ -82,8 +82,9 @@ class TestWeightedTokens:
     def test_cache_creation_full_weight(self):
         assert _weighted_tokens({"cache_creation_input_tokens": 200}) == 200.0
 
-    def test_cache_read_tenth_weight(self):
-        assert _weighted_tokens({"cache_read_input_tokens": 1000}) == pytest.approx(100.0)
+    def test_cache_read_zero_weight(self):
+        # cache_read excluded — re-reads of existing context, not new consumption
+        assert _weighted_tokens({"cache_read_input_tokens": 1000}) == pytest.approx(0.0)
 
     def test_output_full_weight(self):
         assert _weighted_tokens({"output_tokens": 50}) == 50.0
@@ -95,8 +96,8 @@ class TestWeightedTokens:
             "cache_read_input_tokens": 1000,
             "output_tokens": 50,
         })
-        # 100*1 + 200*1 + 1000*0.1 + 50*1 = 100+200+100+50 = 450
-        assert result == pytest.approx(450.0)
+        # 100*1 + 200*1 + 1000*0.0 + 50*1 = 100+200+0+50 = 350
+        assert result == pytest.approx(350.0)
 
     def test_missing_keys_default_to_zero(self):
         assert _weighted_tokens({}) == 0.0
@@ -366,8 +367,8 @@ class TestBurnRate:
         # 600 tokens / 10 min = 60 tok/min
         assert result.burn_rate == pytest.approx(60.0)
 
-    def test_cache_read_at_point1_in_burn_rate(self, tmp_path):
-        """cache_read_input_tokens counted at 0.1x in burn rate."""
+    def test_cache_read_excluded_from_burn_rate(self, tmp_path):
+        """cache_read_input_tokens are 0-weighted — don't contribute to burn rate."""
         f = tmp_path / "session.jsonl"
         f.write_text(
             _make_entry(_ago_iso(60), "claude-opus-4-6", cache_read_input_tokens=1000)
@@ -375,8 +376,8 @@ class TestBurnRate:
 
         with patch.object(_local_mod, "CLAUDE_PROJECTS_DIR", tmp_path):
             result = collect(cache_ttl=0)
-        # 1000 * 0.1 = 100 weighted tokens / 10 min = 10 tok/min
-        assert result.burn_rate == pytest.approx(10.0)
+        # 1000 * 0.0 = 0 weighted tokens → burn_rate = 0
+        assert result.burn_rate == pytest.approx(0.0)
 
 
 class TestStreamingDeduplication:
@@ -412,8 +413,9 @@ class TestStreamingDeduplication:
         with patch.object(_local_mod, "CLAUDE_PROJECTS_DIR", tmp_path):
             result = collect(cache_ttl=0)
 
-        # Should count only FIRST occurrence: 5 + 100_000*0.1 + 10 = 10_015 weighted
-        expected = 5 + 100_000 * 0.1 + 10  # first occurrence output=10, not 500
+        # Should count only FIRST occurrence: 5 + 100_000*0.0 + 10 = 15 weighted
+        # (cache_read excluded at 0.0x; output=10 from first occurrence, not 500)
+        expected = 5 + 100_000 * 0.0 + 10
         assert result.tokens_5h == int(expected)
 
     def test_no_ids_not_deduplicated(self, tmp_path):
@@ -584,8 +586,8 @@ class TestBuildClaudeBurndown:
         panel = build_claude_burndown(local_data, history, console_width=120)
         from rich.panel import Panel
         assert isinstance(panel, Panel)
-        # Panel title should be "Usage Burndown"
-        assert "Usage Burndown" in str(panel.title)
+        # Panel title should be "Claude Activity"
+        assert "Claude Activity" in str(panel.title)
 
     def test_single_point_shows_collecting(self):
         local_data = LocalUsageData()
@@ -616,44 +618,50 @@ class TestBuildClaudeBurndown:
         from rich.panel import Panel
         assert isinstance(panel, Panel)  # no exception
 
-    def test_idle_shown_when_zero_rate(self):
-        """Zero burn_rate → title shows 'idle'."""
+    def test_title_is_always_claude_activity(self):
+        """Title is always 'Claude Activity' — no % duplication with Status panel."""
         local_data = LocalUsageData(burn_rate=0.0)
         history = deque(
             [(time.time() - i, float(i)) for i in range(5)],
             maxlen=300,
         )
         panel = build_claude_burndown(local_data, history, console_width=120)
-        assert "idle" in str(panel.title)
+        assert "Claude Activity" in str(panel.title)
+        assert "used" not in str(panel.title)  # never shows % in title
 
 
-class TestFormatBreakdown:
-    def test_empty_breakdown(self):
-        assert _format_breakdown({}) == ""
+class TestRequestCount:
+    def test_requests_5h_counted(self, tmp_path):
+        """requests_5h counts deduped API calls in the 5h window."""
+        f = tmp_path / "session.jsonl"
+        lines = [
+            json.dumps({"timestamp": _now_iso(), "requestId": "req_1",
+                        "message": {"id": "msg_1", "model": "claude-opus-4-6",
+                                    "usage": {"input_tokens": 10, "output_tokens": 5,
+                                              "cache_creation_input_tokens": 0,
+                                              "cache_read_input_tokens": 0}}}),
+            json.dumps({"timestamp": _now_iso(), "requestId": "req_2",
+                        "message": {"id": "msg_2", "model": "claude-opus-4-6",
+                                    "usage": {"input_tokens": 20, "output_tokens": 8,
+                                              "cache_creation_input_tokens": 0,
+                                              "cache_read_input_tokens": 0}}}),
+        ]
+        f.write_text("\n".join(lines))
 
-    def test_single_model(self):
-        result = _format_breakdown({"claude-opus-4-6": 1_200_000})
-        assert "Opus" in result
-        assert "1.2M" in result
+        with patch.object(_local_mod, "CLAUDE_PROJECTS_DIR", tmp_path):
+            result = collect(cache_ttl=0)
+        assert result.requests_5h == 2
 
-    def test_sorted_by_token_count(self):
-        breakdown = {
-            "claude-haiku-4-5-20251001": 100,
-            "claude-opus-4-6": 500_000,
-            "claude-sonnet-4-6": 200_000,
-        }
-        result = _format_breakdown(breakdown)
-        # Opus should appear first (highest count)
-        opus_pos = result.find("Opus")
-        sonnet_pos = result.find("Sonnet")
-        assert opus_pos < sonnet_pos
+    def test_duplicate_requests_counted_once(self, tmp_path):
+        """Streaming duplicates don't inflate requests_5h."""
+        entry = json.dumps({"timestamp": _now_iso(), "requestId": "req_dup",
+                            "message": {"id": "msg_dup", "model": "claude-sonnet-4-6",
+                                        "usage": {"input_tokens": 5, "output_tokens": 50,
+                                                  "cache_creation_input_tokens": 0,
+                                                  "cache_read_input_tokens": 0}}})
+        f = tmp_path / "session.jsonl"
+        f.write_text(entry + "\n" + entry)  # same request twice
 
-    def test_top_3_only(self):
-        breakdown = {
-            f"claude-model-{i}": i * 1000
-            for i in range(10)
-        }
-        result = _format_breakdown(breakdown)
-        # Should not be extremely long — max 3 entries
-        parts = [p for p in result.split("  ") if p.strip()]
-        assert len(parts) <= 3
+        with patch.object(_local_mod, "CLAUDE_PROJECTS_DIR", tmp_path):
+            result = collect(cache_ttl=0)
+        assert result.requests_5h == 1  # deduped to one

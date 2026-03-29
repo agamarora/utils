@@ -18,6 +18,7 @@ from luna_monitor.collectors.claude import (
     is_configured as claude_configured,
     fetch_usage,
     set_cache_ttl,
+    predict_burndown,
 )
 from luna_monitor.collectors.claude_local import collect as collect_local, get_burn_history
 
@@ -93,10 +94,14 @@ def build_display(config: dict) -> Group:
             usage = fetch_usage(cache_ttl=config.get("cache_ttl_seconds"))
             parts.append(build_claude_status(usage))
 
-            # Burndown panel — sourced from local JSONL files (always works)
+            # Activity panel — waveform + burndown prediction + utilization %
             local_data = collect_local()
             burn_history = get_burn_history()
-            parts.append(build_claude_burndown(local_data, burn_history, width))
+            utilization_pct = usage.five_hour.utilization if usage.fetched_at else None
+            prediction = predict_burndown()
+            parts.append(build_claude_burndown(
+                local_data, burn_history, width, utilization_pct, prediction,
+            ))
         else:
             parts.append(_getting_started())
 
