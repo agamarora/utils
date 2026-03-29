@@ -212,8 +212,13 @@ async def _on_cleanup(app: web.Application) -> None:
 
 def create_app(target: str = DEFAULT_TARGET) -> web.Application:
     """Create the proxy web application."""
-    global _start_time
+    global _start_time, _requests_proxied, _errors_total, _errors_429, _last_latency_ms, _last_capture_ts
     _start_time = time.time()
+    _requests_proxied = 0
+    _errors_total = 0
+    _errors_429 = 0
+    _last_latency_ms = 0
+    _last_capture_ts = ""
 
     _rotate_jsonl()
 

@@ -42,16 +42,16 @@ if sys.platform == "win32":
     from luna_monitor.collectors.platform_win import (
         init_pdh,
         collect_disk_active,
-        collect_temps_lhm,
-        get_lhm_freq_str,
+        collect_temps,
+        get_freq_str,
         get_drive_to_disk,
     )
 else:
     from luna_monitor.collectors.platform_posix import (
         init_pdh,
         collect_disk_active,
-        collect_temps_lhm,
-        get_lhm_freq_str,
+        collect_temps,
+        get_freq_str,
         get_drive_to_disk,
     )
 
@@ -121,7 +121,7 @@ def build_display(config: dict) -> Group:
     avg_pct, _ = sys_collector.collect_cpu()
 
     # Get frequency: LHM real clock if available, else psutil
-    lhm_freq, lhm_mhz = get_lhm_freq_str()
+    lhm_freq, lhm_mhz = get_freq_str()
     if lhm_freq:
         freq_str = lhm_freq
         avg_mhz = lhm_mhz
@@ -153,7 +153,7 @@ def build_display(config: dict) -> Group:
 
     # ── Temperatures ─────────────────────────────────────────
     temps = sys_collector.collect_temps_psutil()
-    lhm_temps = collect_temps_lhm()
+    lhm_temps = collect_temps()
     temps.update(lhm_temps)
 
     # GPU temp from the single collect_gpu() call above

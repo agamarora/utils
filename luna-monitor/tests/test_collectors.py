@@ -143,14 +143,14 @@ class TestPlatformWin:
         result = collect_disk_active()
         assert isinstance(result, dict)
 
-    def test_collect_temps_lhm_returns_dict(self):
-        from luna_monitor.collectors.platform_win import collect_temps_lhm
-        result = collect_temps_lhm()
+    def test_collect_temps_returns_dict(self):
+        from luna_monitor.collectors.platform_win import collect_temps
+        result = collect_temps()
         assert isinstance(result, dict)
 
-    def test_get_lhm_freq_str_returns_tuple(self):
-        from luna_monitor.collectors.platform_win import get_lhm_freq_str
-        freq_str, avg_mhz = get_lhm_freq_str()
+    def test_get_freq_str_returns_tuple(self):
+        from luna_monitor.collectors.platform_win import get_freq_str
+        freq_str, avg_mhz = get_freq_str()
         assert isinstance(freq_str, str)
         assert isinstance(avg_mhz, float)
 
@@ -161,15 +161,15 @@ class TestPlatformPosix:
     def test_all_stubs_return_empty(self):
         from luna_monitor.collectors.platform_posix import (
             init_drive_map, get_drive_to_disk, init_pdh,
-            collect_disk_active, collect_temps_lhm, get_lhm_clocks,
-            get_lhm_freq_str,
+            collect_disk_active, collect_temps, get_clocks,
+            get_freq_str,
         )
         assert init_drive_map() == {}
         assert get_drive_to_disk() == {}
         assert init_pdh() is None
         assert collect_disk_active() == {}
-        assert collect_temps_lhm() == {}
-        assert get_lhm_clocks() == {}
-        freq_str, mhz = get_lhm_freq_str()
+        assert collect_temps() == {}
+        assert get_clocks() == {}
+        freq_str, mhz = get_freq_str()
         assert freq_str == ""
         assert mhz == 0.0
