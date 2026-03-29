@@ -28,6 +28,24 @@ A real-time system dashboard that runs entirely in your terminal. Think Task Man
 cd monitor && pip install -r requirements.txt && python monitor.py
 ```
 
+### [luna-monitor/](luna-monitor/) — Claude Code Developer Dashboard
+
+Everything from monitor/ plus Claude Code usage tracking. The next evolution of the system monitor, built as a pip-installable package with modular architecture.
+
+**What it adds over monitor/:**
+- Claude Code session (5h) and weekly (7d) usage bars with reset timers
+- Usage burndown waveform with time-to-limit prediction
+- Per-model breakdown (Opus, Sonnet) and plan tier display
+- Claude process highlighting in the process panel
+- Modular package structure (collectors, panels, ui)
+- pip-installable with CLI entry point
+
+**Stack:** Python, psutil, Rich, pynvml, Anthropic OAuth API
+
+```bash
+cd luna-monitor && pip install -e . && luna-monitor
+```
+
 ## Adding New Tools
 
 Each tool gets its own directory with:

@@ -1,0 +1,431 @@
+"""Claude Code usage collector — OAuth token management + Anthropic usage API.
+
+Modeled after Claude Pulse (claude_status.py) which is the most reliable
+implementation of this flow. Key patterns borrowed from Pulse:
+- Credential structure: data["claudeAiOauth"]["accessToken"] (nested)
+- Refresh URL: https://platform.claude.com/v1/oauth/token
+- No-redirect handler to prevent token exfiltration
+- Domain allowlist: api.anthropic.com, console.anthropic.com, platform.claude.com
+- macOS Keychain fallback for credentials
+- Refresh request sends NO Bearer header (only refresh_token in body)
+- Never writes tokens to disk
+
+SECURITY: Tokens stored in-memory only. Domain allowlist hardcoded.
+Never log or display token values.
+"""
+
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from collections import deque
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlparse
+
+# ── Constants ────────────────────────────────────────────────
+
+CREDENTIALS_PATH = str(Path.home() / ".claude" / ".credentials.json")
+
+# Hardcoded domain allowlist — tokens are ONLY sent to these domains
+_TOKEN_ALLOWED_DOMAINS = frozenset({
+    "api.anthropic.com",
+    "console.anthropic.com",
+    "platform.claude.com",
+})
+
+_TOKEN_REFRESH_URL = "https://platform.claude.com/v1/oauth/token"
+_USAGE_API_URL = "https://api.anthropic.com/api/oauth/usage"
+_USAGE_API_BETA = "oauth-2025-04-20"
+
+# Expected top-level keys in usage API response — for schema versioning
+_EXPECTED_SCHEMA_KEYS = {"five_hour", "seven_day"}
+
+PLAN_NAMES = {
+    "default_claude_ai": "Pro",
+    "default_claude_max_5x": "Max 5x",
+    "default_claude_max_20x": "Max 20x",
+}
+
+
+# ── Security: redirect blocking ─────────────────────────────
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Block HTTP redirects to prevent tokens from leaking to third-party domains."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target_domain = urlparse(newurl).hostname
+        if target_domain not in _TOKEN_ALLOWED_DOMAINS:
+            raise urllib.error.HTTPError(
+                newurl, code, "Redirect to non-allowed domain blocked", headers, fp
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_safe_opener = urllib.request.build_opener(_NoRedirectHandler)
+
+
+def _authorized_request(url, token, headers=None, data=None, method=None, timeout=10):
+    """Make an HTTP request, only to allowed Anthropic domains.
+
+    Raises ValueError if domain not in allowlist.
+    Uses redirect-blocking opener to prevent token exfiltration.
+    """
+    domain = urlparse(url).hostname
+    if domain not in _TOKEN_ALLOWED_DOMAINS:
+        raise ValueError(f"Token request blocked: {domain} is not an allowed domain")
+    hdrs = dict(headers) if headers else {}
+    if token:
+        hdrs["Authorization"] = f"Bearer {token}"
+    hdrs.setdefault("User-Agent", "luna-monitor/0.1.0")
+    req = urllib.request.Request(url, headers=hdrs, data=data, method=method)
+    return _safe_opener.open(req, timeout=timeout)
+
+
+# ── Data types ───────────────────────────────────────────────
+
+@dataclass
+class UsageWindow:
+    """A single usage window (e.g., five_hour, seven_day)."""
+    utilization: float = 0.0  # 0.0 to 1.0
+    resets_at: str = ""       # ISO 8601 timestamp
+
+
+@dataclass
+class UsageData:
+    """All usage data from the Anthropic API."""
+    five_hour: UsageWindow = field(default_factory=UsageWindow)
+    seven_day: UsageWindow = field(default_factory=UsageWindow)
+    seven_day_opus: UsageWindow = field(default_factory=UsageWindow)
+    seven_day_sonnet: UsageWindow = field(default_factory=UsageWindow)
+    extra_usage: dict = field(default_factory=dict)
+    plan: str = ""            # "Pro", "Max 5x", "Max 20x"
+    fetched_at: float = 0.0
+    error: str = ""           # non-empty if there was a problem
+
+
+@dataclass
+class BurndownPrediction:
+    """Burndown prediction result."""
+    minutes_remaining: float | None = None  # None if can't predict
+    label: str = "Collecting data..."       # human-readable label
+    confidence: str = "low"                 # low, medium, high
+
+
+# ── State ────────────────────────────────────────────────────
+
+_access_token: str | None = None
+_plan: str = ""
+
+_cached_usage: UsageData | None = None
+_cache_ttl: float = 30.0  # seconds
+
+_usage_history: deque = deque(maxlen=300)  # (timestamp, utilization) pairs
+
+
+# ── Credential reading (matches Pulse's structure) ───────────
+
+def _read_credential_data() -> tuple[dict | None, str | None]:
+    """Read raw credential data from file or macOS Keychain. Returns (dict, source)."""
+    # 1. File-based (~/.claude/.credentials.json)
+    try:
+        with open(CREDENTIALS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        if data.get("claudeAiOauth", {}).get("accessToken"):
+            return data, "file"
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        pass
+
+    # 2. macOS Keychain fallback
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["/usr/bin/security", "find-generic-password",
+                 "-s", "Claude Code-credentials", "-w"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                data = json.loads(result.stdout.strip())
+                if data.get("claudeAiOauth", {}).get("accessToken"):
+                    return data, "keychain"
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError, ValueError):
+            pass
+
+    return None, None
+
+
+def _extract_credentials(data: dict | None) -> tuple[str | None, str]:
+    """Extract token and plan name from credential data dict."""
+    if not data:
+        return None, ""
+    oauth = data.get("claudeAiOauth", {})
+    token = oauth.get("accessToken")
+    tier = oauth.get("rateLimitTier", "")
+    if not token:
+        return None, ""
+    plan = PLAN_NAMES.get(
+        tier,
+        tier.replace("default_claude_", "").replace("_", " ").title() if tier else "",
+    )
+    return token, plan
+
+
+def _refresh_oauth_token(refresh_token: str) -> dict | None:
+    """Use refresh token to get a new access token. Returns token data or None.
+
+    Sends NO Bearer header — only the refresh_token in the request body.
+    """
+    try:
+        body = json.dumps({
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        }).encode("utf-8")
+        with _authorized_request(
+            _TOKEN_REFRESH_URL,
+            None,  # no Bearer token for refresh
+            data=body,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        ) as resp:
+            return json.loads(resp.read(100_000))
+    except Exception:
+        return None
+
+
+def get_credentials() -> tuple[str | None, str]:
+    """Read OAuth token from credentials. Returns (token, plan_name)."""
+    global _access_token, _plan
+
+    # Try environment variable first
+    env_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    if env_token:
+        _access_token = env_token
+        _plan = ""
+        return env_token, ""
+
+    data, source = _read_credential_data()
+    if data:
+        token, plan = _extract_credentials(data)
+        if token:
+            _access_token = token
+            _plan = plan
+            return token, plan
+
+    return None, ""
+
+
+def refresh_and_retry() -> tuple[str | None, str]:
+    """Attempt to refresh expired OAuth token. Returns (new_token, plan) or (None, plan)."""
+    global _access_token
+    data, source = _read_credential_data()
+    if not data:
+        return None, _plan
+    oauth = data.get("claudeAiOauth", {})
+    refresh_token = oauth.get("refreshToken")
+    if not refresh_token:
+        return None, _plan
+
+    token_data = _refresh_oauth_token(refresh_token)
+    if not token_data or "access_token" not in token_data:
+        return None, _plan
+
+    # Store in-memory only — never write back to credential file
+    _access_token = token_data["access_token"]
+    return _access_token, _plan
+
+
+def _ensure_valid_token() -> str | None:
+    """Ensure we have a valid access token. Returns token or None."""
+    global _access_token
+    if not _access_token:
+        token, _ = get_credentials()
+        if not token:
+            return None
+    return _access_token
+
+
+# ── Usage API ────────────────────────────────────────────────
+
+def fetch_usage(cache_ttl: float | None = None) -> UsageData:
+    """Fetch Claude usage data from the Anthropic API.
+
+    Returns cached data if within TTL. On error, returns last cached data
+    with an error message, or a fresh UsageData with error set.
+    """
+    global _cached_usage
+    ttl = cache_ttl if cache_ttl is not None else _cache_ttl
+
+    # Return cache if fresh
+    if _cached_usage and (time.time() - _cached_usage.fetched_at) < ttl:
+        return _cached_usage
+
+    token = _ensure_valid_token()
+    if not token:
+        if _cached_usage:
+            _cached_usage.error = "Token unavailable — showing cached data"
+            return _cached_usage
+        return UsageData(error="Claude not configured — authenticate with Claude Code")
+
+    try:
+        with _authorized_request(
+            _USAGE_API_URL,
+            token,
+            headers={"anthropic-beta": _USAGE_API_BETA, "Accept": "application/json"},
+        ) as resp:
+            body = json.loads(resp.read(1_000_000))  # 1 MB max
+
+        # Schema version check
+        if not _EXPECTED_SCHEMA_KEYS.issubset(body.keys()):
+            if _cached_usage:
+                _cached_usage.error = "API schema changed — update luna-monitor"
+                return _cached_usage
+            return UsageData(error="API schema changed — update luna-monitor")
+
+        usage = UsageData(
+            five_hour=_parse_window(body.get("five_hour", {})),
+            seven_day=_parse_window(body.get("seven_day", {})),
+            seven_day_opus=_parse_window(body.get("seven_day_opus", {})),
+            seven_day_sonnet=_parse_window(body.get("seven_day_sonnet", {})),
+            extra_usage=body.get("extra_usage", {}),
+            plan=_plan,
+            fetched_at=time.time(),
+        )
+
+        # Track utilization history for burndown
+        _usage_history.append((time.time(), usage.five_hour.utilization))
+
+        _cached_usage = usage
+        return usage
+
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            # Token expired — try refresh
+            new_token, _ = refresh_and_retry()
+            if new_token:
+                # Retry once with refreshed token
+                return fetch_usage(cache_ttl=0)  # bypass cache for retry
+            err = "Re-authenticate Claude Code"
+        else:
+            err = f"API error ({e.code})"
+        if _cached_usage:
+            _cached_usage.error = err
+            return _cached_usage
+        return UsageData(error=err)
+
+    except (urllib.error.URLError, json.JSONDecodeError, OSError, ValueError):
+        err = "Network error — showing cached data" if _cached_usage else "Network error"
+        if _cached_usage:
+            _cached_usage.error = err
+            return _cached_usage
+        return UsageData(error=err)
+
+
+def _parse_window(data: dict | None) -> UsageWindow:
+    """Parse a usage window from the API response. Handles None gracefully."""
+    if not data:
+        return UsageWindow()
+    return UsageWindow(
+        utilization=float(data.get("utilization", 0.0)),
+        resets_at=str(data.get("resets_at", "")),
+    )
+
+
+# ── Burndown prediction ─────────────────────────────────────
+
+def get_usage_history() -> deque:
+    """Return the usage history deque for the burndown waveform."""
+    return _usage_history
+
+
+def predict_burndown() -> BurndownPrediction:
+    """Predict time until usage limit hit using linear regression.
+
+    Uses the last 10 data points from _usage_history (5-hour window utilization).
+    """
+    if len(_usage_history) < 2:
+        return BurndownPrediction(label="Collecting data...")
+
+    points = list(_usage_history)[-10:]
+
+    if len(points) < 3:
+        return BurndownPrediction(label="Collecting data...", confidence="low")
+
+    # Linear regression: y = mx + b
+    n = len(points)
+    t0 = points[0][0]
+    xs = [p[0] - t0 for p in points]
+    ys = [p[1] for p in points]
+
+    sum_x = sum(xs)
+    sum_y = sum(ys)
+    sum_xy = sum(x * y for x, y in zip(xs, ys))
+    sum_xx = sum(x * x for x in xs)
+
+    denom = n * sum_xx - sum_x * sum_x
+    if abs(denom) < 1e-10:
+        return BurndownPrediction(label="Pace: sustainable", confidence="medium")
+
+    slope = (n * sum_xy - sum_x * sum_y) / denom
+
+    if slope <= 0:
+        if slope < -0.001:
+            _usage_history.clear()
+            return BurndownPrediction(label="Usage reset detected", confidence="low")
+        return BurndownPrediction(label="Pace: sustainable", confidence="medium")
+
+    if abs(slope) < 1e-7:
+        return BurndownPrediction(label="Pace: sustainable", confidence="medium")
+
+    current_util = ys[-1]
+    remaining = 1.0 - current_util
+    if remaining <= 0:
+        return BurndownPrediction(minutes_remaining=0, label="Limit reached", confidence="high")
+
+    seconds_to_limit = remaining / slope
+    minutes = seconds_to_limit / 60
+
+    confidence = "high" if n >= 8 else ("medium" if n >= 5 else "low")
+
+    if minutes > 600:
+        return BurndownPrediction(minutes_remaining=minutes, label="Pace: sustainable", confidence="low")
+
+    return BurndownPrediction(
+        minutes_remaining=minutes,
+        label=f"~{int(minutes)} min remaining (estimated)",
+        confidence=confidence,
+    )
+
+
+def format_reset_time(iso_str: str) -> str:
+    """Format an ISO timestamp into a human-readable 'resets in X' string."""
+    if not iso_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        delta = dt - now
+        total_min = max(0, int(delta.total_seconds() / 60))
+        if total_min >= 60:
+            hours = total_min // 60
+            mins = total_min % 60
+            return f"resets in {hours}h {mins}m"
+        return f"resets in {total_min}m"
+    except (ValueError, TypeError):
+        return ""
+
+
+# ── Module helpers ───────────────────────────────────────────
+
+def set_cache_ttl(ttl: float):
+    """Override the default cache TTL."""
+    global _cache_ttl
+    _cache_ttl = ttl
+
+
+def is_configured() -> bool:
+    """Check if Claude credentials exist (without reading tokens)."""
+    return os.path.exists(CREDENTIALS_PATH)
