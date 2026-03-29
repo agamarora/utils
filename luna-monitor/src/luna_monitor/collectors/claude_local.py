@@ -172,6 +172,10 @@ def _scan_files(now: float) -> LocalUsageData:
     # Collect (timestamp_epoch, weighted_tokens, model_key) for all messages in 7d
     messages: list[tuple[float, float, str]] = []
 
+    # Deduplication set: Claude Code logs streaming responses multiple times with
+    # the same requestId+messageId. We keep only the first occurrence (matches ccusage).
+    seen_keys: set[tuple[str, str]] = set()
+
     try:
         all_files = list(CLAUDE_PROJECTS_DIR.glob("**/*.jsonl"))
     except (PermissionError, OSError):
@@ -191,7 +195,7 @@ def _scan_files(now: float) -> LocalUsageData:
             continue
 
         try:
-            _read_file(path, cutoff_7d, messages)
+            _read_file(path, cutoff_7d, messages, seen_keys)
         except (PermissionError, OSError):
             continue
 
@@ -220,10 +224,14 @@ def _read_file(
     path: Path,
     cutoff_7d: float,
     messages: list,
+    seen_keys: set,
 ) -> None:
     """Read one JSONL file and append valid (ts, weighted_tokens, model) to messages.
 
     Skips bad lines silently. Uses errors='replace' to handle non-UTF-8 bytes.
+    Deduplicates by requestId+messageId — Claude Code logs streaming responses
+    multiple times with the same key but growing output_tokens. We keep the first
+    occurrence (matches ccusage behaviour).
     """
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
@@ -250,6 +258,15 @@ def _read_file(
                 usage = msg.get("usage")
                 if not isinstance(usage, dict):
                     continue
+
+                # Deduplication: skip streaming duplicates (same API call logged multiple times)
+                req_id = entry.get("requestId")
+                msg_id = msg.get("id")
+                if req_id is not None and msg_id is not None:
+                    dedup_key = (req_id, msg_id)
+                    if dedup_key in seen_keys:
+                        continue
+                    seen_keys.add(dedup_key)
 
                 model = msg.get("model") or "unknown"
                 wt = _weighted_tokens(usage)
