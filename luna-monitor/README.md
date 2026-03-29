@@ -19,7 +19,7 @@ That's it. Claude Code will clone, install, and verify. You'll see the dashboard
 ```bash
 git clone https://github.com/agamarora/utils.git
 cd utils/luna-monitor
-pip install -e .
+pip install --user -e .
 luna-monitor
 ```
 
@@ -27,9 +27,11 @@ Or if you already have the repo:
 
 ```bash
 cd luna-monitor
-pip install -e .
-python -m luna_monitor
+pip install --user -e .
+luna-monitor
 ```
+
+> **Windows note:** Use `pip install --user -e .` (with `--user`) to avoid permission errors on system Python. If `luna-monitor` isn't found after install, use `python -m luna_monitor` instead.
 
 ## What You Get
 

@@ -43,7 +43,8 @@ CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 _CACHE_TTL: float = 2.0       # seconds — matches the 2s refresh loop
 _WINDOW_5H: float = 5 * 3600  # seconds
 _WINDOW_7D: float = 7 * 86400  # seconds
-_WINDOW_10M: float = 10 * 60   # seconds — burn rate window
+_WINDOW_10M: float = 10 * 60   # seconds — burn rate display window
+_WINDOW_RATE: float = 2 * 60  # seconds — burn rate for waveform (shorter = more responsive)
 
 # Token weighting: exclude cache_read (re-reads of existing context, not new consumption)
 # Cache reads inflate numbers massively (106M raw in a 5h session) without representing
@@ -171,6 +172,7 @@ def _scan_files(now: float) -> LocalUsageData:
     cutoff_5h = now - _WINDOW_5H
     cutoff_7d = now - _WINDOW_7D
     cutoff_10m = now - _WINDOW_10M
+    cutoff_rate = now - _WINDOW_RATE
 
     # Collect (timestamp_epoch, weighted_tokens, model_key) for all messages in 7d
     messages: list[tuple[float, float, str]] = []
@@ -207,7 +209,9 @@ def _scan_files(now: float) -> LocalUsageData:
     tokens_7d = int(sum(wt for _, wt, _ in messages))  # all entries are within 7d
 
     tokens_10m = sum(wt for ts, wt, _ in messages if ts >= cutoff_10m)
-    burn_rate = tokens_10m / 10.0  # tokens per minute (average over 10min window)
+    # Burn rate for waveform uses a 2-minute window so it drops quickly when idle
+    tokens_rate = sum(wt for ts, wt, _ in messages if ts >= cutoff_rate)
+    burn_rate = tokens_rate / (_WINDOW_RATE / 60.0)  # tokens per minute
 
     # Request count: number of distinct API calls in the 5h window
     requests_5h = sum(1 for ts, _, _ in messages if ts >= cutoff_5h)
