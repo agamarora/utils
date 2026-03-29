@@ -59,7 +59,7 @@ These headers give exact utilization % without the usage endpoint. But Claude Co
 
 **Goal:** Single `pip install luna-monitor && luna-monitor` experience. No separate proxy. No manual settings.json editing. No LHM dependency.
 
-**Status: Core implementation complete.** All 10 planned files built. 313 tests passing.
+**Status: DONE.** All 10 planned files built. 326 tests passing. Eng review complete (9 fixes applied).
 
 **What was built:**
 1. `proxy/lifecycle.py` — proxy thread management, settings.json read-parse-merge (atomic write + backup), PID lockfile, crash recovery, atexit/signal cleanup
@@ -78,11 +78,12 @@ These headers give exact utilization % without the usage endpoint. But Claude Co
 2. Disable proxy (direct Claude, keep luna-monitor for system metrics)
 3. Reset everything (remove all luna-monitor config, restore vanilla Claude Code)
 
-**Remaining for next session:**
-- End-to-end smoke test: start luna-monitor, verify proxy starts, dashboard shows live data, Ctrl+C cleans up
-- Install `wmi` package and verify WMI temp collection works
-- Update README with new workflow
-- Consider: pyproject.toml should list `wmi` as optional Windows dependency
+**Completed (session 4):**
+- [x] End-to-end smoke test: proxy starts, health check, cleanup all verified
+- [x] WMI temp collection verified (falls back to LHM on machines with it running)
+- [x] README updated with v2 workflow (proxy, --doctor, WMI temps)
+- [x] pyproject.toml: `wmi` listed as optional `temps` dependency
+- [x] Eng review: 9 issues found and fixed (counter reset, rename, config consolidation, multi-instance guard, diagnostics, socket timeout, calibration tests, epoch tests)
 
 ### Ecosystem context (researched 2026-03-29)
 
@@ -135,7 +136,7 @@ The calibration code in `claude_burndown.py` has 0 tests:
 - `_load_limit_from_disk()` / `_save_limit_to_disk()` — file I/O
 - Window expiry detection in `claude.py` — `_window_expired()`, `_reset_expired_usage()`
 
-Currently 253 tests passing across all modules.
+Currently 326 tests passing across all modules.
 
 ---
 
