@@ -331,55 +331,44 @@ class TestClaudeStatusPanel:
 
 
 class TestClaudeBurndownPanel:
+    """Tests updated for the JSONL-based burndown panel (LocalUsageData + burn_history)."""
+
+    def _make_history(self, n: int = 0, rate: float = 50.0) -> deque:
+        now = time.time()
+        h = deque(maxlen=300)
+        for i in range(n):
+            h.append((now + i * 30, rate))
+        return h
+
     def test_render_no_data(self):
         from luna_monitor.panels.claude_burndown import build_claude_burndown
-        history = deque(maxlen=300)
-        prediction = BurndownPrediction(label="Collecting data...")
-        result = build_claude_burndown(history, prediction, console_width=80)
+        from luna_monitor.collectors.claude_local import LocalUsageData
+        result = build_claude_burndown(LocalUsageData(), self._make_history(0), console_width=80)
         assert isinstance(result, Panel)
 
     def test_render_with_data(self):
         from luna_monitor.panels.claude_burndown import build_claude_burndown
-        history = deque(maxlen=300)
-        now = time.time()
-        for i in range(20):
-            history.append((now + i * 30, 10.0 + i * 2.0))
-        prediction = BurndownPrediction(
-            minutes_remaining=45,
-            label="~45 min remaining (estimated)",
-            confidence="medium",
-        )
-        result = build_claude_burndown(history, prediction, console_width=80)
+        from luna_monitor.collectors.claude_local import LocalUsageData
+        local_data = LocalUsageData(burn_rate=5000.0, tokens_5h=1_000_000)
+        result = build_claude_burndown(local_data, self._make_history(20, rate=5000.0), console_width=80)
         assert isinstance(result, Panel)
 
     def test_render_sustainable(self):
         from luna_monitor.panels.claude_burndown import build_claude_burndown
-        history = deque(maxlen=300)
-        now = time.time()
-        for i in range(10):
-            history.append((now + i * 30, 30.0))
-        prediction = BurndownPrediction(label="Pace: sustainable", confidence="medium")
-        result = build_claude_burndown(history, prediction, console_width=80)
+        from luna_monitor.collectors.claude_local import LocalUsageData
+        result = build_claude_burndown(LocalUsageData(burn_rate=100.0), self._make_history(10, rate=100.0), console_width=80)
         assert isinstance(result, Panel)
 
     def test_burndown_uses_magenta_style(self):
         from luna_monitor.panels.claude_burndown import build_claude_burndown
-        history = deque(maxlen=300)
-        now = time.time()
-        for i in range(5):
-            history.append((now + i * 30, 50.0))
-        prediction = BurndownPrediction(label="Pace: sustainable")
-        result = build_claude_burndown(history, prediction, console_width=80)
+        from luna_monitor.collectors.claude_local import LocalUsageData
+        result = build_claude_burndown(LocalUsageData(burn_rate=50.0), self._make_history(5, rate=50.0), console_width=80)
         assert result.border_style == "cyan"  # Claude panel border
 
     def test_narrow_console(self):
         from luna_monitor.panels.claude_burndown import build_claude_burndown
-        history = deque(maxlen=300)
-        now = time.time()
-        for i in range(5):
-            history.append((now + i * 30, 30.0 + i * 10.0))
-        prediction = BurndownPrediction(label="~30 min remaining (estimated)")
-        result = build_claude_burndown(history, prediction, console_width=30)
+        from luna_monitor.collectors.claude_local import LocalUsageData
+        result = build_claude_burndown(LocalUsageData(burn_rate=200.0), self._make_history(5, rate=200.0), console_width=30)
         assert isinstance(result, Panel)
 
 

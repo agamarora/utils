@@ -17,10 +17,9 @@ from luna_monitor.collectors.gpu import GPU_AVAILABLE, GPU_NAME, collect_gpu
 from luna_monitor.collectors.claude import (
     is_configured as claude_configured,
     fetch_usage,
-    get_usage_history,
-    predict_burndown,
     set_cache_ttl,
 )
+from luna_monitor.collectors.claude_local import collect as collect_local, get_burn_history
 
 from luna_monitor.panels.cpu import build_cpu
 from luna_monitor.panels.memory import build_memory_lines
@@ -94,10 +93,10 @@ def build_display(config: dict) -> Group:
             usage = fetch_usage(cache_ttl=config.get("cache_ttl_seconds"))
             parts.append(build_claude_status(usage))
 
-            # Burndown panel
-            usage_history = get_usage_history()
-            prediction = predict_burndown()
-            parts.append(build_claude_burndown(usage_history, prediction, width))
+            # Burndown panel — sourced from local JSONL files (always works)
+            local_data = collect_local()
+            burn_history = get_burn_history()
+            parts.append(build_claude_burndown(local_data, burn_history, width))
         else:
             parts.append(_getting_started())
 
