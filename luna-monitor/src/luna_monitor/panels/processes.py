@@ -20,14 +20,28 @@ def is_claude_process(proc: dict) -> bool:
     """Check if a process is related to Claude Code.
 
     Matches by process name or command-line arguments containing
-    claude/@anthropic patterns.
+    claude/@anthropic patterns. For node processes, fetches cmdline
+    lazily via psutil to avoid the cost of reading every process's
+    command line on every refresh cycle.
     """
     name = (proc.get("name") or "").lower()
     if name in _CLAUDE_PROCESS_NAMES:
         return True
-    # node processes running Claude Code
+    # node processes running Claude Code — fetch cmdline lazily
     if name in ("node", "node.exe"):
-        cmdline = proc.get("cmdline") or []
+        cmdline = proc.get("cmdline")
+        if cmdline is None:
+            # Lazy fetch: try to get cmdline from psutil by PID
+            pid = proc.get("pid")
+            if pid:
+                try:
+                    import psutil
+                    p = psutil.Process(pid)
+                    cmdline = p.cmdline()
+                except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
+                    cmdline = []
+            else:
+                cmdline = []
         if isinstance(cmdline, list):
             cmd_str = " ".join(cmdline).lower()
         else:
