@@ -293,14 +293,55 @@ def _get_fresh_token() -> tuple[str | None, str]:
 
 # ── Usage API ────────────────────────────────────────────────
 
+def _try_proxy_data() -> UsageData | None:
+    """Check if luna-proxy has fresh rate limit data. Returns UsageData or None.
+
+    If the proxy is running and has captured headers within the last 60 seconds,
+    build a UsageData from the proxy data instead of calling the broken usage API.
+    """
+    try:
+        from luna_monitor.collectors.rate_limit import collect as rl_collect, freshness
+        rl_data = rl_collect()
+        if rl_data is None or not freshness(rl_data, max_age_s=60.0):
+            return None
+
+        # Proxy headers report utilization as 0.0-1.0, we store as 0-100
+        usage = UsageData(
+            five_hour=UsageWindow(
+                utilization=max(0.0, min(100.0, rl_data.util_5h * 100.0)),
+                resets_at=rl_data.reset_5h,
+            ),
+            seven_day=UsageWindow(
+                utilization=max(0.0, min(100.0, rl_data.util_7d * 100.0)),
+                resets_at=rl_data.reset_7d,
+            ),
+            plan=_plan,
+            fetched_at=time.time(),
+            error="",
+        )
+
+        # Track utilization history for burndown
+        _usage_history.append((time.time(), usage.five_hour.utilization))
+
+        # Mark source so the UI can indicate "via proxy"
+        usage.extra_usage = {"_source": "proxy"}
+
+        return usage
+    except Exception:
+        return None
+
+
 _retry_count = 0  # prevent infinite retry loops
 
 def fetch_usage(cache_ttl: float | None = None) -> UsageData:
-    """Fetch Claude usage data from the Anthropic API.
+    """Fetch Claude usage data from the Anthropic API or proxy.
 
     Reads token fresh from credentials file every call (same as Pulse).
     Returns cached data if within TTL. On error, returns last cached data
     with an error message, or a fresh UsageData with error set.
+
+    If luna-proxy is running, uses proxy-captured rate limit headers instead
+    of the (broken) usage API. Falls back to API if proxy data is stale.
 
     Uses exponential backoff on 429: 30s → 60s → 120s → 300s → stays at 5 min.
     Backoff is tracked separately from TTL so we never hammer the API while
@@ -313,6 +354,12 @@ def fetch_usage(cache_ttl: float | None = None) -> UsageData:
     # Return in-memory cache if fresh AND window hasn't expired
     if _cached_usage and (now - _cached_usage.fetched_at) < ttl:
         return _reset_expired_usage(_cached_usage)
+
+    # ── Proxy shortcut: use proxy-captured rate limit headers if fresh ──
+    proxy_usage = _try_proxy_data()
+    if proxy_usage is not None:
+        _cached_usage = proxy_usage
+        return proxy_usage
 
     # Backoff gate — don't touch API until backoff window clears.
     # This is above the disk-cache check intentionally: if we're rate limited
@@ -531,11 +578,10 @@ def _window_expired(usage: UsageData) -> bool:
     resets_at = usage.five_hour.resets_at
     if not resets_at:
         return False
-    try:
-        dt = datetime.fromisoformat(resets_at.replace("Z", "+00:00"))
-        return datetime.now(timezone.utc) > dt
-    except (ValueError, TypeError):
+    dt = _parse_reset_ts(resets_at)
+    if dt is None:
         return False
+    return datetime.now(timezone.utc) > dt
 
 
 def _reset_expired_usage(usage: UsageData) -> UsageData:
@@ -546,12 +592,31 @@ def _reset_expired_usage(usage: UsageData) -> UsageData:
     return usage
 
 
+def _parse_reset_ts(ts_str: str) -> datetime | None:
+    """Parse a reset timestamp that may be ISO 8601 or Unix epoch."""
+    if not ts_str:
+        return None
+    try:
+        # Try Unix epoch first (proxy sends these: "1774796400")
+        epoch = float(ts_str)
+        if epoch > 1_000_000_000:  # sanity: after 2001
+            return datetime.fromtimestamp(epoch, tz=timezone.utc)
+    except (ValueError, TypeError, OverflowError):
+        pass
+    try:
+        return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
 def format_reset_time(iso_str: str) -> str:
-    """Format an ISO timestamp into a human-readable 'resets in X' string."""
+    """Format a timestamp (ISO or epoch) into a human-readable 'resets in X' string."""
     if not iso_str:
         return ""
     try:
-        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        dt = _parse_reset_ts(iso_str)
+        if dt is None:
+            return ""
         now = datetime.now(timezone.utc)
         delta = dt - now
         total_min = max(0, int(delta.total_seconds() / 60))

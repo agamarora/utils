@@ -40,52 +40,61 @@ These headers give exact utilization % without the usage endpoint. But Claude Co
 
 **Next steps when resuming:**
 
-### Phase 1: Proxy Gateway Experiment (NEXT SESSION)
+### Phase 1: Proxy Gateway Experiment — DONE (session 3)
 
-The core problem: we need the **denominator** (utilization %) to make the dashboard meaningful. Counting tokens without knowing the limit is just a number with no context. The only real-time source of utilization % is the rate limit headers on every API response — but Claude Code doesn't expose them.
+**Result: SUCCESS.** Built aiohttp reverse proxy. Captured live headers from real Claude Code traffic:
+- `5h_utilization: 0.38-0.40` (session 38-40%)
+- `7d_utilization: 0.23-0.24` (weekly 23-24%)
+- `5h_reset: 1774796400` (epoch, not ISO — handled)
+- `status: "allowed"`
 
-**Experiment: API proxy that intercepts rate limit headers**
+**Key findings:**
+- `ANTHROPIC_BASE_URL` in `~/.claude/settings.json` env block routes Claude Code through local proxy. Confirmed working.
+- Must set `auto_decompress=False` in aiohttp ClientSession to avoid ZlibError (double decompression).
+- Reset timestamps come as Unix epoch, not ISO 8601. `_parse_reset_ts()` handles both.
+- Anthropic SDK retries on ECONNREFUSED: 2 retries, 500ms + 1s backoff, 1.5s total window. Verified from actual SDK source (`@anthropic-ai/sdk core.js`).
+- Claude Code without proxy running: fails with "Execution error" after retries (~2-3s hang).
 
-Inspired by ccNexus (810 stars, active). Sit a local proxy between Claude Code and `api.anthropic.com`. Capture these headers from every completion response:
-- `anthropic-ratelimit-unified-5h-utilization` → session %
-- `anthropic-ratelimit-unified-7d-utilization` → weekly %
-- `anthropic-ratelimit-unified-*-resets-at` → reset timestamps
+### Phase 2: luna-monitor v2 — Unified Bulletproof Dashboard (NEXT SESSION)
 
-**Experiment steps:**
-1. Build minimal transparent HTTPS proxy (mitmproxy or custom)
-2. Configure Claude Code to route through it (`ANTHROPIC_BASE_URL` or system proxy)
-3. Verify headers are present and parseable on real responses
-4. Feed captured data to luna-monitor via shared file or socket
-5. Measure: does it add latency? Does Claude Code work normally through it?
+**Goal:** Single `pip install luna-monitor && luna-monitor` experience. No separate proxy. No manual settings.json editing. No LHM dependency.
 
-**Key question:** Can Claude Code be configured to use a custom base URL or proxy? Check `ANTHROPIC_BASE_URL`, `HTTP_PROXY`, `HTTPS_PROXY` env vars, or Claude Code settings.
+**Plan file:** `~/.claude/plans/shimmying-napping-stardust.md` (reviewed via /autoplan, approved)
+
+**5 Safety Layers for the embedded proxy:**
+1. **Watchdog thread** — restarts proxy within 500ms (inside SDK retry window)
+2. **atexit + signal cleanup** — removes ANTHROPIC_BASE_URL on clean shutdown
+3. **Crash recovery on startup** — detects stale config from prior crash via PID lockfile
+4. **SDK retry tolerance** — 1.5s window covers proxy restart (verified from SDK source)
+5. **Manual escape hatch** — `luna-monitor --disable-proxy` removes config instantly
+
+**What to build (10 files, ~400 new lines):**
+1. `proxy/lifecycle.py` (new) — start/stop proxy thread, settings.json management, lockfile
+2. `proxy/watchdog.py` (new) — health monitor, auto-restart, failure counter
+3. `proxy/server.py` (modify) — add `run_in_thread()` for embedded mode
+4. `__main__.py` (modify) — add --enable-proxy/--disable-proxy, lifecycle hooks
+5. `config.py` (modify) — add proxy_enabled, proxy_port settings
+6. `app.py` (modify) — wire proxy start/stop into main loop
+7. `panels/claude_status.py` (modify) — proxy status indicators
+8. `collectors/platform_win.py` (modify) — replace LHM with WMI for temps
+9. `pyproject.toml` (modify) — add wmi dependency
+10. 16 new tests covering all safety layers
+
+**settings.json management rules:**
+- Always read-parse-merge, never overwrite
+- Atomic write (temp file + rename)
+- Backup original on first modification
+- Only touch `env.ANTHROPIC_BASE_URL`, nothing else
+
+**First-run UX:**
+```
+luna-monitor can show live Claude Code usage (session %, weekly %, time remaining)
+by routing API calls through a local proxy. Enable? [Y/n]
+```
 
 **Reference implementations:**
-- `lich0821/ccNexus` (810★, active) — full proxy with credential rotation, token pool, multi-format support
-- `steipete/CodexBar` (9.5K★, active) — multi-method fallback: OAuth → browser cookies → CLI PTY
-
-### Phase 2: Alternatives (if proxy doesn't work)
-
-**2a. Web cookie endpoint** — `claude.ai/api/organizations/{orgId}/usage` via browser cookies. Separate rate limit bucket from OAuth, no 429s. Fragile (cookies expire) but proven by CodexBar.
-
-**2b. Statusline JSON** — Monitor Anthropic feature requests:
-- [Issue #27915](https://github.com/anthropics/claude-code/issues/27915) — Expose rate-limit data in statusLine JSON (30+ upvotes)
-- [Issue #34074](https://github.com/anthropics/claude-code/issues/34074) — Add rate limit utilization to status line JSON
-- [Issue #38380](https://github.com/anthropics/claude-code/issues/38380) — Expose usage/rate limit data via CLI flag or hook event
-
-**2c. OTel telemetry** — `CLAUDE_CODE_ENABLE_TELEMETRY=1` pipes data to OpenTelemetry collector. `claude-code-otel` (322★) did this but is stale (last push Jun 2025). Heavy but enterprise-grade.
-
-### Phase 3: Full Sprint (once data source is proven)
-
-Once we know which method reliably delivers utilization %, run a full `/autoplan` sprint to:
-1. Incorporate mature JSONL parsing from ccusage (dedup, weighting, window alignment)
-2. Wire proven utilization source into Claude Status panel
-3. Build real burndown: tokens spent + limit + burn rate → "~Xh remaining"
-4. Consider: should luna-monitor BE a statusLine command?
-
-### Old questions (still open)
-1. Decide: keep Claude Status panel (shows stale/empty data) or hide it until data source works?
-2. Redesign Activity panel around JSONL-only data (waveform is the real value)
+- `lich0821/ccNexus` (810★) — full Go proxy, confirms ANTHROPIC_BASE_URL pattern
+- `steipete/CodexBar` (9.5K★) — multi-method fallback approach
 
 ### Ecosystem context (researched 2026-03-29)
 
@@ -142,7 +151,23 @@ Currently 253 tests passing across all modules.
 
 ---
 
-## DONE (this session — session 2)
+## DONE (session 3 — proxy experiment)
+
+- [x] Built aiohttp reverse proxy (`proxy/server.py`, 215 lines)
+- [x] CLI entry point (`proxy/cli.py`, `luna-proxy` command)
+- [x] Rate limit collector (`collectors/rate_limit.py`, reads proxy JSONL)
+- [x] Wired proxy data into `claude.py:_try_proxy_data()` — bypasses broken usage API
+- [x] "via proxy" / "via API" indicator in Status panel
+- [x] Fixed ZlibError: `auto_decompress=False` in aiohttp ClientSession
+- [x] Fixed epoch timestamps: `_parse_reset_ts()` handles both epoch and ISO
+- [x] Health endpoint (`GET /health`) for watchdog monitoring
+- [x] JSONL rotation (keep last 1000 entries on startup)
+- [x] Atomic JSONL write via `os.O_APPEND`
+- [x] Verified headers present on real Claude Code traffic (5h: 40%, 7d: 24%)
+- [x] Verified SDK retry behavior from source (2 retries, 1.5s window)
+- [x] 285 tests passing (31 new: 18 proxy + 14 rate_limit)
+
+## DONE (session 2)
 
 - [x] Streaming deduplication: (requestId, messageId) dedup matches ccusage
 - [x] cache_read weight 0.1x → 0.0x (tokens now reflect real work: 1.5M not 12M)

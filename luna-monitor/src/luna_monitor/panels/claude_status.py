@@ -65,6 +65,13 @@ def build_claude_status(usage: UsageData) -> object:
         breakdown.append(f"Sonnet {sonnet_pct:.0f}%", style="dim")
         lines.append(breakdown)
 
+    # Data source indicator
+    source = usage.extra_usage.get("_source", "")
+    if source == "proxy":
+        lines.append(Text("via proxy", style="green dim"))
+    elif usage.fetched_at and not usage.error:
+        lines.append(Text("via API", style="dim"))
+
     # Only show errors that indicate a real problem the user should act on
     # "Rate limited" and "showing cached data" are transient — don't clutter the UI
     if usage.error and "cached" not in usage.error.lower() and "rate" not in usage.error.lower():
