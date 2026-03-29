@@ -310,20 +310,20 @@ def fetch_usage(cache_ttl: float | None = None) -> UsageData:
     ttl = cache_ttl if cache_ttl is not None else _cache_ttl
     now = time.time()
 
-    # Return in-memory cache if fresh
+    # Return in-memory cache if fresh AND window hasn't expired
     if _cached_usage and (now - _cached_usage.fetched_at) < ttl:
-        return _cached_usage
+        return _reset_expired_usage(_cached_usage)
 
     # Backoff gate — don't touch API until backoff window clears.
     # This is above the disk-cache check intentionally: if we're rate limited
     # we have cached data already; no need to re-read disk either.
     if now < _backoff_until and cache_ttl != 0:  # cache_ttl=0 = forced retry, skip backoff
         if _cached_usage:
-            return _cached_usage
+            return _reset_expired_usage(_cached_usage)
         disk = _read_disk_cache(ttl=None)
         if disk:
-            _cached_usage = disk
-            return disk
+            _cached_usage = _reset_expired_usage(disk)
+            return _cached_usage
         return UsageData(error="Rate limited — no cached data")
 
     # On cold start (no in-memory cache), try disk cache within TTL
@@ -396,24 +396,30 @@ def fetch_usage(cache_ttl: float | None = None) -> UsageData:
             wait = _BACKOFF_STEPS[min(_backoff_step, len(_BACKOFF_STEPS) - 1)]
             _backoff_until = time.time() + wait
             _backoff_step = min(_backoff_step + 1, len(_BACKOFF_STEPS) - 1)
-            # Fall back to stale disk cache (like Pulse)
+            # Fall back to stale disk cache (like Pulse), but detect expired windows
             stale = _read_disk_cache(ttl=None)  # no TTL = accept any age
             if stale:
-                stale.error = "Rate limited — showing cached data"
+                stale = _reset_expired_usage(stale)
+                if not stale.error:
+                    stale.error = "Rate limited — showing cached data"
                 _cached_usage = stale
                 return stale
             err = "Rate limited — will retry"
         else:
             err = f"API error ({e.code})"
         if _cached_usage:
-            _cached_usage.error = err
+            _cached_usage = _reset_expired_usage(_cached_usage)
+            if not _cached_usage.error:
+                _cached_usage.error = err
             return _cached_usage
         return UsageData(error=err)
 
     except (urllib.error.URLError, json.JSONDecodeError, OSError, ValueError):
         err = "Network error — showing cached data" if _cached_usage else "Network error"
         if _cached_usage:
-            _cached_usage.error = err
+            _cached_usage = _reset_expired_usage(_cached_usage)
+            if not _cached_usage.error:
+                _cached_usage.error = err
             return _cached_usage
         return UsageData(error=err)
 
@@ -426,7 +432,10 @@ def _parse_window(data: dict | None) -> UsageWindow:
     """
     if not data:
         return UsageWindow()
+    import math
     raw_util = float(data.get("utilization", 0.0))
+    if math.isnan(raw_util) or math.isinf(raw_util):
+        raw_util = 0.0
     return UsageWindow(
         utilization=max(0.0, min(100.0, raw_util)),
         resets_at=str(data.get("resets_at", "")),
@@ -511,6 +520,30 @@ def predict_burndown() -> BurndownPrediction:
         label=f"~{int(minutes)} min remaining (estimated)",
         confidence=confidence,
     )
+
+
+def _window_expired(usage: UsageData) -> bool:
+    """Check if the 5h window has reset since this data was fetched.
+
+    If resets_at is in the past, the cached utilization is from a dead window
+    and should not be shown — the real session has reset to ~0%.
+    """
+    resets_at = usage.five_hour.resets_at
+    if not resets_at:
+        return False
+    try:
+        dt = datetime.fromisoformat(resets_at.replace("Z", "+00:00"))
+        return datetime.now(timezone.utc) > dt
+    except (ValueError, TypeError):
+        return False
+
+
+def _reset_expired_usage(usage: UsageData) -> UsageData:
+    """If the 5h window expired, zero out the stale utilization."""
+    if _window_expired(usage):
+        usage.five_hour = UsageWindow()  # 0% utilization, no resets_at
+        usage.error = "Session reset — awaiting fresh data"
+    return usage
 
 
 def format_reset_time(iso_str: str) -> str:
