@@ -23,7 +23,9 @@ from luna_monitor.collectors.claude import (
     _usage_history,
     PLAN_NAMES,
     _EXPECTED_SCHEMA_KEYS,
+    _BACKOFF_STEPS,
 )
+import luna_monitor.collectors.claude as _claude_mod
 
 
 # ── Credential parsing ───────────────────────────────────────
@@ -379,3 +381,101 @@ class TestClaudeBurndownPanel:
         prediction = BurndownPrediction(label="~30 min remaining (estimated)")
         result = build_claude_burndown(history, prediction, console_width=30)
         assert isinstance(result, Panel)
+
+
+# ── Exponential backoff on 429 ───────────────────────────────
+
+class TestExponentialBackoff:
+    """Test 429 backoff: 30s → 60s → 120s → 300s → stays at 300s."""
+
+    def setup_method(self):
+        # Reset all backoff + cache state before each test
+        _claude_mod._backoff_step = 0
+        _claude_mod._backoff_until = 0.0
+        _claude_mod._cached_usage = None
+        _claude_mod._retry_count = 0
+
+    def test_backoff_steps_defined(self):
+        assert _BACKOFF_STEPS == [30.0, 60.0, 120.0, 300.0]
+
+    def test_first_429_sets_30s_backoff(self):
+        """First 429 → next retry blocked for 30 seconds."""
+        before = time.time()
+        with patch("luna_monitor.collectors.claude._authorized_request") as mock_req, \
+             patch("luna_monitor.collectors.claude._get_fresh_token", return_value=("tok", "Pro")), \
+             patch("luna_monitor.collectors.claude._read_disk_cache", return_value=None):
+            import urllib.error
+            mock_req.side_effect = urllib.error.HTTPError(None, 429, "Too Many Requests", {}, None)
+            from luna_monitor.collectors.claude import fetch_usage
+            fetch_usage()
+        assert _claude_mod._backoff_step == 1
+        assert _claude_mod._backoff_until >= before + 29  # ~30s
+
+    def test_second_429_sets_60s_backoff(self):
+        """Second consecutive 429 → 60s backoff."""
+        _claude_mod._backoff_step = 1
+        before = time.time()
+        with patch("luna_monitor.collectors.claude._authorized_request") as mock_req, \
+             patch("luna_monitor.collectors.claude._get_fresh_token", return_value=("tok", "Pro")), \
+             patch("luna_monitor.collectors.claude._read_disk_cache", return_value=None):
+            import urllib.error
+            mock_req.side_effect = urllib.error.HTTPError(None, 429, "Too Many Requests", {}, None)
+            from luna_monitor.collectors.claude import fetch_usage
+            fetch_usage()
+        assert _claude_mod._backoff_step == 2
+        assert _claude_mod._backoff_until >= before + 59  # ~60s
+
+    def test_fourth_plus_429_caps_at_300s(self):
+        """Step 3+ → capped at 300s (5 min)."""
+        _claude_mod._backoff_step = 3  # already at max index
+        before = time.time()
+        with patch("luna_monitor.collectors.claude._authorized_request") as mock_req, \
+             patch("luna_monitor.collectors.claude._get_fresh_token", return_value=("tok", "Pro")), \
+             patch("luna_monitor.collectors.claude._read_disk_cache", return_value=None):
+            import urllib.error
+            mock_req.side_effect = urllib.error.HTTPError(None, 429, "Too Many Requests", {}, None)
+            from luna_monitor.collectors.claude import fetch_usage
+            fetch_usage()
+        assert _claude_mod._backoff_step == 3  # stays at max
+        assert _claude_mod._backoff_until >= before + 299  # ~300s
+
+    def test_backoff_gate_blocks_api_call(self):
+        """While in backoff window, API is never called — returns cached data."""
+        cached = UsageData(
+            five_hour=UsageWindow(utilization=50.0),
+            seven_day=UsageWindow(utilization=30.0),
+            fetched_at=0.0,  # expired TTL
+        )
+        _claude_mod._cached_usage = cached
+        _claude_mod._backoff_until = time.time() + 60  # 60s backoff active
+
+        with patch("luna_monitor.collectors.claude._authorized_request") as mock_req, \
+             patch("luna_monitor.collectors.claude._get_fresh_token", return_value=("tok", "Pro")):
+            from luna_monitor.collectors.claude import fetch_usage
+            result = fetch_usage()
+            mock_req.assert_not_called()  # API never touched
+        assert result is cached
+
+    def test_success_resets_backoff(self):
+        """Successful API call resets backoff step and until to 0."""
+        _claude_mod._backoff_step = 3
+        _claude_mod._backoff_until = 0.0  # backoff expired, allow retry
+
+        good_body = {
+            "five_hour": {"utilization": 40.0, "resets_at": "2026-03-30T00:00:00Z"},
+            "seven_day": {"utilization": 20.0, "resets_at": "2026-04-05T00:00:00Z"},
+        }
+
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.read.return_value = json.dumps(good_body).encode()
+
+        with patch("luna_monitor.collectors.claude._authorized_request", return_value=mock_resp), \
+             patch("luna_monitor.collectors.claude._get_fresh_token", return_value=("tok", "Pro")), \
+             patch("luna_monitor.collectors.claude._write_disk_cache"):
+            from luna_monitor.collectors.claude import fetch_usage
+            fetch_usage()
+
+        assert _claude_mod._backoff_step == 0
+        assert _claude_mod._backoff_until == 0.0

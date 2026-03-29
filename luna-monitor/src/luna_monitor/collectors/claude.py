@@ -139,6 +139,11 @@ _cred_cache: tuple[dict | None, str | None] | None = None
 _cred_cache_time: float = 0.0
 _CRED_CACHE_TTL: float = 30.0  # re-read credentials file every 30s
 
+# Exponential backoff on 429 — 30s → 60s → 120s → 300s, then stays at 5 min
+_BACKOFF_STEPS: list[float] = [30.0, 60.0, 120.0, 300.0]
+_backoff_step: int = 0    # index into _BACKOFF_STEPS
+_backoff_until: float = 0.0  # epoch timestamp — no API calls before this
+
 # Disk-based cache — survives restarts, used on 429 and cold start
 _DISK_CACHE_DIR = str(Path.home() / ".luna-monitor")
 _DISK_CACHE_FILE = str(Path.home() / ".luna-monitor" / "usage-cache.json")
@@ -296,13 +301,30 @@ def fetch_usage(cache_ttl: float | None = None) -> UsageData:
     Reads token fresh from credentials file every call (same as Pulse).
     Returns cached data if within TTL. On error, returns last cached data
     with an error message, or a fresh UsageData with error set.
+
+    Uses exponential backoff on 429: 30s → 60s → 120s → 300s → stays at 5 min.
+    Backoff is tracked separately from TTL so we never hammer the API while
+    rate limited (previously: stale cache caused TTL check to fail every 2s).
     """
-    global _cached_usage, _retry_count
+    global _cached_usage, _retry_count, _backoff_step, _backoff_until
     ttl = cache_ttl if cache_ttl is not None else _cache_ttl
+    now = time.time()
 
     # Return in-memory cache if fresh
-    if _cached_usage and (time.time() - _cached_usage.fetched_at) < ttl:
+    if _cached_usage and (now - _cached_usage.fetched_at) < ttl:
         return _cached_usage
+
+    # Backoff gate — don't touch API until backoff window clears.
+    # This is above the disk-cache check intentionally: if we're rate limited
+    # we have cached data already; no need to re-read disk either.
+    if now < _backoff_until and cache_ttl != 0:  # cache_ttl=0 = forced retry, skip backoff
+        if _cached_usage:
+            return _cached_usage
+        disk = _read_disk_cache(ttl=None)
+        if disk:
+            _cached_usage = disk
+            return disk
+        return UsageData(error="Rate limited — no cached data")
 
     # On cold start (no in-memory cache), try disk cache within TTL
     if not _cached_usage:
@@ -332,6 +354,8 @@ def fetch_usage(cache_ttl: float | None = None) -> UsageData:
             body = json.loads(resp.read(1_000_000))  # 1 MB max
 
         _retry_count = 0  # reset on success
+        _backoff_step = 0   # successful call resets the backoff ladder
+        _backoff_until = 0.0
 
         # Schema version check
         if not _EXPECTED_SCHEMA_KEYS.issubset(body.keys()):
@@ -368,7 +392,11 @@ def fetch_usage(cache_ttl: float | None = None) -> UsageData:
                 return fetch_usage(cache_ttl=0)  # bypass cache for retry
             err = "Re-authenticate Claude Code"
         elif e.code == 429:
-            # Rate limited — fall back to stale disk cache (like Pulse)
+            # Advance exponential backoff: 30s → 60s → 120s → 300s → stays at 5min
+            wait = _BACKOFF_STEPS[min(_backoff_step, len(_BACKOFF_STEPS) - 1)]
+            _backoff_until = time.time() + wait
+            _backoff_step = min(_backoff_step + 1, len(_BACKOFF_STEPS) - 1)
+            # Fall back to stale disk cache (like Pulse)
             stale = _read_disk_cache(ttl=None)  # no TTL = accept any age
             if stale:
                 stale.error = "Rate limited — showing cached data"
