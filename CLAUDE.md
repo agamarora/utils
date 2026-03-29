@@ -31,6 +31,31 @@ The monitor is one 590-line Python file with no internal modules. It uses Rich `
 
 **Key design choice**: LHM data is fetched via `powershell Invoke-WebRequest` subprocess rather than `requests`/`urllib` to avoid adding a dependency. This is intentional.
 
+## Running luna-monitor
+
+```bash
+cd luna-monitor && pip install -e . && luna-monitor
+```
+
+On first run, it asks whether to enable the embedded proxy for live usage tracking. Use `luna-monitor --doctor` to change this later.
+
+### luna-monitor/ (pip-installable package)
+
+Modular dashboard with collectors, panels, and an embedded proxy. ~3600 lines across 30 source files. 326 tests.
+
+**Source layout:** `src/luna_monitor/` with subdirectories:
+- `collectors/` — data gathering (claude.py, claude_local.py, rate_limit.py, system.py, gpu.py, platform_win.py)
+- `panels/` — Rich renderables (claude_status.py, claude_burndown.py, cpu.py, memory.py, gpu.py, disks.py, network.py, temps.py, processes.py)
+- `proxy/` — embedded reverse proxy (server.py, lifecycle.py, watchdog.py, cli.py)
+- `ui/` — shared chart and color utilities (charts.py, colors.py)
+
+**Key design choices:**
+- Proxy runs as a daemon thread with its own asyncio event loop, not blocking the Rich UI
+- `auto_decompress=False` in aiohttp ClientSession avoids double-decompression (ZlibError)
+- Settings.json modified via read-parse-merge with atomic temp-file-plus-rename writes
+- WMI for temps (primary) with LibreHardwareMonitor HTTP fallback
+- Config consolidated to `~/.luna-monitor/config.json` (single path)
+
 ## Adding a New Tool
 
 Create a new directory with the script, `requirements.txt`, and `README.md`. Add an entry to the root `README.md` under Tools.

@@ -30,17 +30,19 @@ cd monitor && pip install -r requirements.txt && python monitor.py
 
 ### [luna-monitor/](luna-monitor/) — Claude Code Developer Dashboard
 
-Everything from monitor/ plus Claude Code usage tracking. The next evolution of the system monitor, built as a pip-installable package with modular architecture.
+Everything from monitor/ plus live Claude Code usage tracking via an embedded reverse proxy. The dashboard every Claude Code developer needs in their second terminal tab.
 
-**What it adds over monitor/:**
-- Claude Code session (5h) and weekly (7d) usage bars with reset timers
+**What it shows:**
+- Live session (5h) and weekly (7d) usage bars with reset countdown timers
 - Usage burndown waveform with time-to-limit prediction
-- Per-model breakdown (Opus, Sonnet) and plan tier display
-- Claude process highlighting in the process panel
-- Modular package structure (collectors, panels, ui)
-- pip-installable with CLI entry point
+- API health: latency, request count, 429 error tracking
+- CPU, GPU, memory, disk, network, temperatures (WMI or LibreHardwareMonitor)
+- Top processes with Claude processes highlighted
+- `--doctor` interactive setup wizard for proxy configuration
 
-**Stack:** Python, psutil, Rich, pynvml, Anthropic OAuth API
+**How usage tracking works:** An embedded reverse proxy captures rate limit headers from Claude Code API responses. No extra API calls needed. Five safety layers (crash recovery, watchdog, lockfile, signal handlers, settings.json backup) ensure clean lifecycle management.
+
+**Stack:** Python, psutil, Rich, aiohttp, pynvml (optional)
 
 ```bash
 cd luna-monitor && pip install -e . && luna-monitor
