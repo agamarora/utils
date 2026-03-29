@@ -177,7 +177,7 @@ Drop any of these in a folder on your PATH and you can just type `luna` from any
 
 Windows-first. The architecture separates all Windows-specific code (`platform_win.py`) behind a clean abstraction. Linux/macOS stubs exist — real implementations welcome as PRs.
 
-## 313 Tests
+## 327 Tests
 
 ```bash
 cd luna-monitor

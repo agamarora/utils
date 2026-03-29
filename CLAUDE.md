@@ -34,14 +34,14 @@ The monitor is one 590-line Python file with no internal modules. It uses Rich `
 ## Running luna-monitor
 
 ```bash
-cd luna-monitor && pip install -e . && luna-monitor
+pip install luna-monitor && luna-monitor
 ```
 
 On first run, it asks whether to enable the embedded proxy for live usage tracking. Use `luna-monitor --doctor` to change this later.
 
 ### luna-monitor/ (pip-installable package)
 
-Modular dashboard with collectors, panels, and an embedded proxy. ~3600 lines across 30 source files. 326 tests.
+Modular dashboard with collectors, panels, and an embedded proxy. ~3600 lines across 30 source files. 327 tests. Published on [PyPI](https://pypi.org/project/luna-monitor/).
 
 **Source layout:** `src/luna_monitor/` with subdirectories:
 - `collectors/` — data gathering (claude.py, claude_local.py, rate_limit.py, system.py, gpu.py, platform_win.py)

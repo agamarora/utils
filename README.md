@@ -45,7 +45,7 @@ Everything from monitor/ plus live Claude Code usage tracking via an embedded re
 **Stack:** Python, psutil, Rich, aiohttp, pynvml (optional)
 
 ```bash
-cd luna-monitor && pip install -e . && luna-monitor
+pip install luna-monitor && luna-monitor
 ```
 
 ## Adding New Tools
