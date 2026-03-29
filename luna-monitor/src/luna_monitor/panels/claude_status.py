@@ -65,8 +65,9 @@ def build_claude_status(usage: UsageData) -> object:
         breakdown.append(f"Sonnet {sonnet_pct:.0f}%", style="dim")
         lines.append(breakdown)
 
-    # Stale data indicator
-    if usage.error:
+    # Only show errors that indicate a real problem the user should act on
+    # "Rate limited" and "showing cached data" are transient — don't clutter the UI
+    if usage.error and "cached" not in usage.error.lower() and "rate" not in usage.error.lower():
         lines.append(Text(f"⚠ {usage.error}", style="yellow dim"))
 
     return make_panel(Group(*lines), "Claude Code", claude=True)
