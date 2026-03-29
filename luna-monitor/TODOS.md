@@ -1,6 +1,6 @@
 # luna-monitor — Outstanding TODOs
 
-Last updated: 2026-03-29
+Last updated: 2026-03-29 (session 3)
 
 ---
 
@@ -55,46 +55,34 @@ These headers give exact utilization % without the usage endpoint. But Claude Co
 - Anthropic SDK retries on ECONNREFUSED: 2 retries, 500ms + 1s backoff, 1.5s total window. Verified from actual SDK source (`@anthropic-ai/sdk core.js`).
 - Claude Code without proxy running: fails with "Execution error" after retries (~2-3s hang).
 
-### Phase 2: luna-monitor v2 — Unified Bulletproof Dashboard (NEXT SESSION)
+### Phase 2: luna-monitor v2 — Unified Bulletproof Dashboard — MOSTLY DONE (session 3)
 
 **Goal:** Single `pip install luna-monitor && luna-monitor` experience. No separate proxy. No manual settings.json editing. No LHM dependency.
 
-**Plan file:** `~/.claude/plans/shimmying-napping-stardust.md` (reviewed via /autoplan, approved)
+**Status: Core implementation complete.** All 10 planned files built. 313 tests passing.
 
-**5 Safety Layers for the embedded proxy:**
-1. **Watchdog thread** — restarts proxy within 500ms (inside SDK retry window)
-2. **atexit + signal cleanup** — removes ANTHROPIC_BASE_URL on clean shutdown
-3. **Crash recovery on startup** — detects stale config from prior crash via PID lockfile
-4. **SDK retry tolerance** — 1.5s window covers proxy restart (verified from SDK source)
-5. **Manual escape hatch** — `luna-monitor --disable-proxy` removes config instantly
+**What was built:**
+1. `proxy/lifecycle.py` — proxy thread management, settings.json read-parse-merge (atomic write + backup), PID lockfile, crash recovery, atexit/signal cleanup
+2. `proxy/watchdog.py` — health monitor daemon thread, auto-restart, 3-failure threshold
+3. `proxy/server.py` — API health tracking (latency, error rates, 429 count) + auto_decompress fix
+4. `__main__.py` — `--enable-proxy`, `--disable-proxy`, `--doctor`, first-run prompt, proxy lifecycle
+5. `config.py` — reads proxy_enabled/proxy_port from `~/.luna-monitor/config.json`
+6. `app.py` — passes proxy status + API health to status panel
+7. `panels/claude_status.py` — shows "via proxy 1.2s 42 reqs 3 429s" + watchdog state
+8. `collectors/rate_limit.py` — ProxyHealth dataclass + collect_proxy_health()
+9. `collectors/platform_win.py` — WMI temps (primary) with LHM fallback
+10. 28 new tests (lifecycle settings roundtrip, lockfile, crash recovery, watchdog restart)
 
-**What to build (10 files, ~400 new lines):**
-1. `proxy/lifecycle.py` (new) — start/stop proxy thread, settings.json management, lockfile
-2. `proxy/watchdog.py` (new) — health monitor, auto-restart, failure counter
-3. `proxy/server.py` (modify) — add `run_in_thread()` for embedded mode
-4. `__main__.py` (modify) — add --enable-proxy/--disable-proxy, lifecycle hooks
-5. `config.py` (modify) — add proxy_enabled, proxy_port settings
-6. `app.py` (modify) — wire proxy start/stop into main loop
-7. `panels/claude_status.py` (modify) — proxy status indicators
-8. `collectors/platform_win.py` (modify) — replace LHM with WMI for temps
-9. `pyproject.toml` (modify) — add wmi dependency
-10. 16 new tests covering all safety layers
+**`--doctor` command (3 modes):**
+1. Enable proxy (route Claude through luna-monitor)
+2. Disable proxy (direct Claude, keep luna-monitor for system metrics)
+3. Reset everything (remove all luna-monitor config, restore vanilla Claude Code)
 
-**settings.json management rules:**
-- Always read-parse-merge, never overwrite
-- Atomic write (temp file + rename)
-- Backup original on first modification
-- Only touch `env.ANTHROPIC_BASE_URL`, nothing else
-
-**First-run UX:**
-```
-luna-monitor can show live Claude Code usage (session %, weekly %, time remaining)
-by routing API calls through a local proxy. Enable? [Y/n]
-```
-
-**Reference implementations:**
-- `lich0821/ccNexus` (810★) — full Go proxy, confirms ANTHROPIC_BASE_URL pattern
-- `steipete/CodexBar` (9.5K★) — multi-method fallback approach
+**Remaining for next session:**
+- End-to-end smoke test: start luna-monitor, verify proxy starts, dashboard shows live data, Ctrl+C cleans up
+- Install `wmi` package and verify WMI temp collection works
+- Update README with new workflow
+- Consider: pyproject.toml should list `wmi` as optional Windows dependency
 
 ### Ecosystem context (researched 2026-03-29)
 
