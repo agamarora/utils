@@ -139,6 +139,11 @@ _cred_cache: tuple[dict | None, str | None] | None = None
 _cred_cache_time: float = 0.0
 _CRED_CACHE_TTL: float = 30.0  # re-read credentials file every 30s
 
+# Disk-based cache — survives restarts, used on 429 and cold start
+_DISK_CACHE_DIR = str(Path.home() / ".luna-monitor")
+_DISK_CACHE_FILE = str(Path.home() / ".luna-monitor" / "usage-cache.json")
+_USAGE_CACHE_KEYS = {"five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "extra_usage"}
+
 
 # ── Credential reading (matches Pulse's structure) ───────────
 
@@ -295,9 +300,16 @@ def fetch_usage(cache_ttl: float | None = None) -> UsageData:
     global _cached_usage, _retry_count
     ttl = cache_ttl if cache_ttl is not None else _cache_ttl
 
-    # Return cache if fresh
+    # Return in-memory cache if fresh
     if _cached_usage and (time.time() - _cached_usage.fetched_at) < ttl:
         return _cached_usage
+
+    # On cold start (no in-memory cache), try disk cache within TTL
+    if not _cached_usage:
+        disk = _read_disk_cache(ttl=ttl)
+        if disk:
+            _cached_usage = disk
+            return _cached_usage
 
     # Reset retry count at entry (prevents stale state from prior calls)
     if cache_ttl != 0:  # cache_ttl=0 is a retry call, don't reset
@@ -341,6 +353,9 @@ def fetch_usage(cache_ttl: float | None = None) -> UsageData:
         # Track utilization history for burndown
         _usage_history.append((time.time(), usage.five_hour.utilization))
 
+        # Persist to disk (survives restarts, used on 429)
+        _write_disk_cache(body, plan)
+
         _cached_usage = usage
         return usage
 
@@ -353,6 +368,12 @@ def fetch_usage(cache_ttl: float | None = None) -> UsageData:
                 return fetch_usage(cache_ttl=0)  # bypass cache for retry
             err = "Re-authenticate Claude Code"
         elif e.code == 429:
+            # Rate limited — fall back to stale disk cache (like Pulse)
+            stale = _read_disk_cache(ttl=None)  # no TTL = accept any age
+            if stale:
+                stale.error = "Rate limited — showing cached data"
+                _cached_usage = stale
+                return stale
             err = "Rate limited — will retry"
         else:
             err = f"API error ({e.code})"
@@ -372,14 +393,14 @@ def fetch_usage(cache_ttl: float | None = None) -> UsageData:
 def _parse_window(data: dict | None) -> UsageWindow:
     """Parse a usage window from the API response. Handles None gracefully.
 
-    Clamps utilization to [0.0, 1.0] to prevent negative ETAs from
-    out-of-range API values.
+    The API returns utilization as 0-100 (percentage). We store it as 0-100
+    to match Pulse's convention. Clamps to [0, 100].
     """
     if not data:
         return UsageWindow()
     raw_util = float(data.get("utilization", 0.0))
     return UsageWindow(
-        utilization=max(0.0, min(1.0, raw_util)),
+        utilization=max(0.0, min(100.0, raw_util)),
         resets_at=str(data.get("resets_at", "")),
     )
 
@@ -434,17 +455,18 @@ def predict_burndown() -> BurndownPrediction:
 
     if slope <= 0:
         # Only clear history on a real reset (large drop, not rounding artifacts)
-        # -0.01 utilization/second = dropping 1% per second, clearly a reset
-        if slope < -0.01:
+        # -1.0 pct/second = dropping 1 percentage point per second, clearly a reset
+        if slope < -1.0:
             _usage_history.clear()
             return BurndownPrediction(label="Usage reset detected", confidence="low")
         return BurndownPrediction(label="Pace: sustainable", confidence="medium")
 
-    if abs(slope) < 1e-7:
+    if abs(slope) < 1e-5:  # ~0.001% per second = negligible (0-100 scale)
         return BurndownPrediction(label="Pace: sustainable", confidence="medium")
 
+    # utilization is 0-100 (percentage)
     current_util = ys[-1]
-    remaining = 1.0 - current_util
+    remaining = 100.0 - current_util
     if remaining <= 0:
         return BurndownPrediction(minutes_remaining=0, label="Limit reached", confidence="high")
 
@@ -479,6 +501,51 @@ def format_reset_time(iso_str: str) -> str:
         return f"resets in {total_min}m"
     except (ValueError, TypeError):
         return ""
+
+
+# ── Disk cache (survives restarts, used on 429/cold start) ───
+
+def _write_disk_cache(usage_dict: dict, plan: str):
+    """Write usage data to disk cache. Fire-and-forget (never crash)."""
+    try:
+        os.makedirs(_DISK_CACHE_DIR, exist_ok=True)
+        data = {
+            "timestamp": time.time(),
+            "plan": plan,
+            "usage": {k: v for k, v in usage_dict.items() if k in _USAGE_CACHE_KEYS},
+        }
+        with open(_DISK_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except OSError:
+        pass
+
+
+def _read_disk_cache(ttl: float | None = None) -> UsageData | None:
+    """Read usage data from disk cache. Returns UsageData or None.
+
+    If ttl is None, returns data regardless of age (stale fallback for 429).
+    If ttl is set, only returns data younger than ttl seconds.
+    """
+    try:
+        with open(_DISK_CACHE_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        ts = data.get("timestamp", 0)
+        if ttl is not None and (time.time() - ts) >= ttl:
+            return None
+        usage_raw = data.get("usage", {})
+        if not usage_raw:
+            return None
+        return UsageData(
+            five_hour=_parse_window(usage_raw.get("five_hour")),
+            seven_day=_parse_window(usage_raw.get("seven_day")),
+            seven_day_opus=_parse_window(usage_raw.get("seven_day_opus")),
+            seven_day_sonnet=_parse_window(usage_raw.get("seven_day_sonnet")),
+            extra_usage=usage_raw.get("extra_usage", {}),
+            plan=data.get("plan", ""),
+            fetched_at=ts,
+        )
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, OSError):
+        return None
 
 
 # ── Module helpers ───────────────────────────────────────────
