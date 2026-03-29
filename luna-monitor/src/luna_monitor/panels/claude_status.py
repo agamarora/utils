@@ -1,13 +1,14 @@
 """Claude Status panel — the soul of luna-monitor.
 
 Shows: plan tier, session (5h) usage %, weekly (7d) usage %,
-per-model breakdown, reset timers. Distinct cyan border.
+per-model breakdown, reset timers, proxy + API health. Distinct cyan border.
 """
 
 from rich.console import Group
 from rich.text import Text
 
 from luna_monitor.collectors.claude import UsageData, format_reset_time
+from luna_monitor.collectors.rate_limit import ProxyHealth
 from luna_monitor.ui.charts import hbar, make_panel
 from luna_monitor.ui.colors import pct_color
 
@@ -16,6 +17,7 @@ def build_claude_status(
     usage: UsageData,
     proxy_running: bool = False,
     proxy_enabled: bool | None = None,
+    proxy_health: ProxyHealth | None = None,
 ) -> object:
     """Build the Claude Status panel.
 
@@ -23,6 +25,7 @@ def build_claude_status(
         usage: UsageData from fetch_usage(). May have .error set.
         proxy_running: Whether the embedded proxy is currently active.
         proxy_enabled: User's proxy preference (None = not decided).
+        proxy_health: ProxyHealth from collect_proxy_health(), or None.
     """
     # Error state
     if usage.error and not usage.fetched_at:
@@ -71,12 +74,14 @@ def build_claude_status(
         breakdown.append(f"Sonnet {sonnet_pct:.0f}%", style="dim")
         lines.append(breakdown)
 
-    # Data source and proxy status indicator
+    # Data source + API health status line
     source = usage.extra_usage.get("_source", "")
-    if source == "proxy":
+    if source == "proxy" and proxy_health and proxy_health.proxy_up:
+        status = _format_api_health(proxy_health)
+        lines.append(status)
+    elif source == "proxy":
         lines.append(Text("via proxy", style="green dim"))
     elif proxy_running:
-        # Proxy is running but data isn't flowing yet (or watchdog recovering)
         try:
             from luna_monitor.proxy.watchdog import is_recovering
             if is_recovering:
@@ -86,13 +91,39 @@ def build_claude_status(
         except ImportError:
             lines.append(Text("via proxy", style="dim"))
     elif proxy_enabled is False:
-        pass  # user disabled proxy, don't show anything
+        pass
     elif usage.fetched_at and not usage.error:
         lines.append(Text("via API", style="dim"))
 
     # Only show errors that indicate a real problem the user should act on
-    # "Rate limited" and "showing cached data" are transient — don't clutter the UI
     if usage.error and "cached" not in usage.error.lower() and "rate" not in usage.error.lower():
         lines.append(Text(f"⚠ {usage.error}", style="yellow dim"))
 
     return make_panel(Group(*lines), "Claude Code", claude=True)
+
+
+def _format_api_health(health: ProxyHealth) -> Text:
+    """Format the API health status line from proxy health data."""
+    t = Text()
+    t.append("via proxy", style="green dim")
+
+    # Latency
+    if health.last_latency_ms > 0:
+        lat = health.last_latency_ms
+        lat_style = "green dim" if lat < 2000 else ("yellow dim" if lat < 5000 else "red dim")
+        if lat >= 1000:
+            t.append(f"  {lat / 1000:.1f}s", style=lat_style)
+        else:
+            t.append(f"  {lat:.0f}ms", style=lat_style)
+
+    # Request count
+    if health.requests_proxied > 0:
+        t.append(f"  {health.requests_proxied} reqs", style="dim")
+
+    # Error indicator (only show if errors exist)
+    if health.api_errors_429 > 0:
+        t.append(f"  {health.api_errors_429} 429s", style="red dim")
+    elif health.api_errors_total > 0:
+        t.append(f"  {health.api_errors_total} errors", style="yellow dim")
+
+    return t

@@ -26,6 +26,10 @@ def _config_path() -> str:
     )
 
 
+def _luna_config_path() -> str:
+    return os.path.join(os.path.expanduser("~"), ".luna-monitor", "config.json")
+
+
 def load_config() -> dict:
     """Load config from disk, falling back to defaults for missing keys.
 
@@ -42,9 +46,7 @@ def load_config() -> dict:
         pass
 
     # Also read luna-monitor-specific config (proxy settings etc.)
-    luna_config_path = os.path.join(
-        os.path.expanduser("~"), ".luna-monitor", "config.json"
-    )
+    luna_config_path = _luna_config_path()
     try:
         with open(luna_config_path, encoding="utf-8") as f:
             luna = json.load(f)

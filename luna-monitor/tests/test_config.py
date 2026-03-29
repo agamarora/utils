@@ -11,6 +11,15 @@ from luna_monitor.config import load_config, DEFAULTS
 class TestLoadConfig:
     """load_config: loads JSON config with defaults fallback."""
 
+    # Patch luna config path to avoid reading real ~/.luna-monitor/config.json
+    _LUNA_PATCH = patch("luna_monitor.config._luna_config_path", return_value="/nonexistent/luna.json")
+
+    def setup_method(self):
+        self._luna_mock = self._LUNA_PATCH.start()
+
+    def teardown_method(self):
+        self._LUNA_PATCH.stop()
+
     def test_returns_defaults_when_no_file(self):
         config = load_config()
         for key, val in DEFAULTS.items():

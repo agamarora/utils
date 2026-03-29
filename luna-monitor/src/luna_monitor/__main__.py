@@ -41,6 +41,11 @@ def parse_args():
         help="Disable the rate limit proxy and restore settings.json",
     )
     parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="Interactive setup: enable/disable proxy or reset to vanilla Claude Code",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__import__('luna_monitor').__version__}",
@@ -62,6 +67,87 @@ def _save_proxy_choice(enabled: bool) -> None:
 
     config["proxy_enabled"] = enabled
     config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+
+
+def _run_doctor() -> None:
+    """Interactive setup/reset for luna-monitor."""
+    from pathlib import Path
+    from luna_monitor.proxy.lifecycle import (
+        write_proxy_setting, remove_proxy_setting, remove_lockfile,
+        has_proxy_setting, check_stale_lockfile,
+    )
+
+    print()
+    print("luna-monitor doctor")
+    print("=" * 40)
+
+    # Show current state
+    proxy_cfg = _load_luna_config()
+    proxy_enabled = proxy_cfg.get("proxy_enabled")
+    has_setting = has_proxy_setting()
+    stale = check_stale_lockfile()
+
+    if stale:
+        print("Warning: Stale proxy config detected (previous crash).")
+    if proxy_enabled is True:
+        print(f"Current: Proxy ENABLED" + (" (settings.json configured)" if has_setting else " (settings.json NOT configured)"))
+    elif proxy_enabled is False:
+        print("Current: Proxy DISABLED")
+    else:
+        print("Current: Proxy not yet configured")
+
+    print()
+    print("Options:")
+    print("  1) Enable proxy (route Claude Code through luna-monitor for live usage %)")
+    print("  2) Disable proxy (use Claude Code directly, keep luna-monitor for system metrics)")
+    print("  3) Reset everything (remove all luna-monitor config, restore vanilla Claude Code)")
+    print("  4) Cancel")
+    print()
+
+    try:
+        choice = input("Choose [1/2/3/4]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled.")
+        return
+
+    if choice == "1":
+        _save_proxy_choice(True)
+        write_proxy_setting(proxy_cfg.get("proxy_port", 9120))
+        print("Proxy enabled. Run 'luna-monitor' to start.")
+
+    elif choice == "2":
+        _save_proxy_choice(False)
+        remove_proxy_setting()
+        remove_lockfile()
+        print("Proxy disabled. Claude Code will connect directly to Anthropic.")
+
+    elif choice == "3":
+        # Full reset: remove settings, lockfile, config, backup
+        remove_proxy_setting()
+        remove_lockfile()
+        luna_dir = Path.home() / ".luna-monitor"
+        for f in ("config.json", "settings.json.backup", "proxy.pid",
+                   "rate-limits.jsonl", "usage-cache.json", "calibrated-limits.json"):
+            try:
+                (luna_dir / f).unlink(missing_ok=True)
+            except OSError:
+                pass
+        print("Reset complete. Claude Code is back to vanilla.")
+        print("All luna-monitor config removed from ~/.luna-monitor/")
+        print("settings.json restored (ANTHROPIC_BASE_URL removed).")
+
+    else:
+        print("Cancelled.")
+
+
+def _load_luna_config() -> dict:
+    """Read luna-monitor config from ~/.luna-monitor/config.json."""
+    from pathlib import Path
+    try:
+        p = Path.home() / ".luna-monitor" / "config.json"
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
 
 
 def _first_run_prompt() -> bool:
@@ -117,6 +203,11 @@ def _setup_proxy(config: dict) -> None:
 
 def main():
     args = parse_args()
+
+    # Handle --doctor
+    if args.doctor:
+        _run_doctor()
+        return
 
     # Handle --enable-proxy / --disable-proxy
     if args.enable_proxy:

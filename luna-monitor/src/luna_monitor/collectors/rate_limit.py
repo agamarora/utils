@@ -105,3 +105,56 @@ def _to_float(val) -> float:
         return float(val)
     except (ValueError, TypeError):
         return 0.0
+
+
+# ── Proxy health / API stats ────────────────────────────────
+
+@dataclass
+class ProxyHealth:
+    """Health and API stats from the proxy's /health endpoint."""
+    proxy_up: bool = False
+    uptime_s: int = 0
+    requests_proxied: int = 0
+    api_errors_total: int = 0
+    api_errors_429: int = 0
+    last_latency_ms: float = 0.0
+
+
+_health_cached: ProxyHealth | None = None
+_health_cached_at: float = 0.0
+
+
+def collect_proxy_health(port: int = 9120, cache_ttl: float = _CACHE_TTL) -> ProxyHealth:
+    """Fetch proxy health and API stats. Returns ProxyHealth (proxy_up=False if down)."""
+    global _health_cached, _health_cached_at
+
+    now = time.time()
+    if _health_cached is not None and (now - _health_cached_at) < cache_ttl:
+        return _health_cached
+
+    result = _fetch_health(port)
+    _health_cached = result
+    _health_cached_at = now
+    return result
+
+
+def _fetch_health(port: int) -> ProxyHealth:
+    """GET /health from the proxy. Never raises."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/health", timeout=1
+        ) as resp:
+            if resp.status != 200:
+                return ProxyHealth()
+            data = json.loads(resp.read(10_000))
+            return ProxyHealth(
+                proxy_up=True,
+                uptime_s=int(data.get("uptime_s", 0)),
+                requests_proxied=int(data.get("requests_proxied", 0)),
+                api_errors_total=int(data.get("api_errors_total", 0)),
+                api_errors_429=int(data.get("api_errors_429", 0)),
+                last_latency_ms=_to_float(data.get("last_latency_ms", 0)),
+            )
+    except Exception:
+        return ProxyHealth()

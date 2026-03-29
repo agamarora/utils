@@ -123,7 +123,41 @@ def collect_disk_active() -> dict:
     return _disk_active_pct
 
 
-# ── LHM temperatures + clock speeds ─────────────────────────
+# ── Temperature collection (WMI → LHM fallback) ─────────────
+
+def _collect_temps_wmi() -> dict:
+    """Try WMI for CPU temperature. Returns {label: temp_celsius} or empty."""
+    if not is_windows():
+        return {}
+    try:
+        import wmi
+        w = wmi.WMI(namespace="root\\OpenHardwareMonitor")
+        sensors = w.Sensor()
+        temps = {}
+        for s in sensors:
+            if s.SensorType == "Temperature":
+                temps[s.Name] = float(s.Value)
+            if s.SensorType == "Clock" and "CPU Core" in s.Name:
+                _lhm_clocks[s.Name] = float(s.Value)
+        return temps
+    except Exception:
+        pass
+
+    # Fallback: try MSAcpi_ThermalZoneTemperature (requires admin, less reliable)
+    try:
+        import wmi
+        w = wmi.WMI(namespace="root\\wmi")
+        zones = w.MSAcpi_ThermalZoneTemperature()
+        temps = {}
+        for i, z in enumerate(zones):
+            # WMI returns temp in tenths of Kelvin
+            celsius = (z.CurrentTemperature / 10.0) - 273.15
+            if 0 < celsius < 120:
+                temps[f"Thermal Zone {i}"] = round(celsius, 1)
+        return temps
+    except Exception:
+        return {}
+
 
 def _lhm_parse_node(node: dict, temps: dict):
     """Recursively walk LHM data.json and collect temp + clock sensors."""
@@ -143,13 +177,10 @@ def _lhm_parse_node(node: dict, temps: dict):
         _lhm_parse_node(child, temps)
 
 
-def collect_temps_lhm() -> dict:
-    """Query LibreHardwareMonitor HTTP server (cached every LHM_REFRESH seconds)."""
-    global _lhm_cache, _lhm_last_query
-    if time.time() - _lhm_last_query < LHM_REFRESH:
-        return _lhm_cache
+def _collect_temps_lhm() -> dict:
+    """Query LibreHardwareMonitor HTTP server. Returns temps or empty."""
     if not is_windows():
-        return _lhm_cache
+        return {}
     try:
         res = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command",
@@ -160,11 +191,35 @@ def collect_temps_lhm() -> dict:
         if res.returncode == 0 and res.stdout.strip():
             root = json.loads(res.stdout)
             found: dict = {}
-            _lhm_clocks.clear()  # clear stale entries before re-parse
+            _lhm_clocks.clear()
             _lhm_parse_node(root, found)
-            _lhm_cache = found
+            return found
     except Exception:
         pass
+    return {}
+
+
+def collect_temps_lhm() -> dict:
+    """Collect CPU temps: try WMI first, fall back to LHM HTTP server.
+
+    Cached every LHM_REFRESH seconds regardless of source.
+    """
+    global _lhm_cache, _lhm_last_query
+    if time.time() - _lhm_last_query < LHM_REFRESH:
+        return _lhm_cache
+
+    # Try WMI first (no external dependency, no admin)
+    temps = _collect_temps_wmi()
+    if temps:
+        _lhm_cache = temps
+        _lhm_last_query = time.time()
+        return _lhm_cache
+
+    # Fall back to LHM HTTP server
+    temps = _collect_temps_lhm()
+    if temps:
+        _lhm_cache = temps
+
     _lhm_last_query = time.time()
     return _lhm_cache
 

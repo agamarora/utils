@@ -21,6 +21,7 @@ from luna_monitor.collectors.claude import (
     predict_burndown,
 )
 from luna_monitor.collectors.claude_local import collect as collect_local, get_burn_history
+from luna_monitor.collectors.rate_limit import collect_proxy_health
 
 from luna_monitor.panels.cpu import build_cpu
 from luna_monitor.panels.memory import build_memory_lines
@@ -93,13 +94,16 @@ def build_display(config: dict) -> Group:
         if claude_configured():
             usage = fetch_usage(cache_ttl=config.get("cache_ttl_seconds"))
 
-            # Pass proxy status to status panel
+            # Pass proxy status + API health to status panel
             proxy_running = config.get("_proxy_running", False)
             proxy_enabled = config.get("proxy_enabled")
+            proxy_port = config.get("_proxy_port", config.get("proxy_port", 9120))
+            proxy_health = collect_proxy_health(port=proxy_port) if proxy_running else None
             parts.append(build_claude_status(
                 usage,
                 proxy_running=proxy_running,
                 proxy_enabled=proxy_enabled,
+                proxy_health=proxy_health,
             ))
 
             # Activity panel — waveform + burndown prediction + utilization %
