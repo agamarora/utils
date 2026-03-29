@@ -25,7 +25,10 @@ def _config_path() -> str:
 
 
 def load_config() -> dict:
-    """Load config from disk, falling back to defaults for missing keys."""
+    """Load config from disk, falling back to defaults for missing keys.
+
+    Validates values to prevent crashes from bad config (e.g., zero refresh).
+    """
     config = dict(DEFAULTS)
     path = _config_path()
     try:
@@ -35,4 +38,11 @@ def load_config() -> dict:
             config.update(user)
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         pass
+
+    # Clamp values to safe ranges
+    config["refresh_seconds"] = max(0.5, float(config.get("refresh_seconds", 2.0)))
+    config["cache_ttl_seconds"] = max(5, int(config.get("cache_ttl_seconds", 30)))
+    if not isinstance(config.get("drives"), list):
+        config["drives"] = DEFAULTS["drives"]
+
     return config
