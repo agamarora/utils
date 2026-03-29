@@ -92,7 +92,15 @@ def build_display(config: dict) -> Group:
     if claude_enabled:
         if claude_configured():
             usage = fetch_usage(cache_ttl=config.get("cache_ttl_seconds"))
-            parts.append(build_claude_status(usage))
+
+            # Pass proxy status to status panel
+            proxy_running = config.get("_proxy_running", False)
+            proxy_enabled = config.get("proxy_enabled")
+            parts.append(build_claude_status(
+                usage,
+                proxy_running=proxy_running,
+                proxy_enabled=proxy_enabled,
+            ))
 
             # Activity panel — waveform + burndown prediction + utilization %
             local_data = collect_local()

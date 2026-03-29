@@ -12,11 +12,17 @@ from luna_monitor.ui.charts import hbar, make_panel
 from luna_monitor.ui.colors import pct_color
 
 
-def build_claude_status(usage: UsageData) -> object:
+def build_claude_status(
+    usage: UsageData,
+    proxy_running: bool = False,
+    proxy_enabled: bool | None = None,
+) -> object:
     """Build the Claude Status panel.
 
     Args:
         usage: UsageData from fetch_usage(). May have .error set.
+        proxy_running: Whether the embedded proxy is currently active.
+        proxy_enabled: User's proxy preference (None = not decided).
     """
     # Error state
     if usage.error and not usage.fetched_at:
@@ -65,10 +71,22 @@ def build_claude_status(usage: UsageData) -> object:
         breakdown.append(f"Sonnet {sonnet_pct:.0f}%", style="dim")
         lines.append(breakdown)
 
-    # Data source indicator
+    # Data source and proxy status indicator
     source = usage.extra_usage.get("_source", "")
     if source == "proxy":
         lines.append(Text("via proxy", style="green dim"))
+    elif proxy_running:
+        # Proxy is running but data isn't flowing yet (or watchdog recovering)
+        try:
+            from luna_monitor.proxy.watchdog import is_recovering
+            if is_recovering:
+                lines.append(Text("Proxy: restarting...", style="yellow dim"))
+            else:
+                lines.append(Text("via proxy (waiting for data)", style="dim"))
+        except ImportError:
+            lines.append(Text("via proxy", style="dim"))
+    elif proxy_enabled is False:
+        pass  # user disabled proxy, don't show anything
     elif usage.fetched_at and not usage.error:
         lines.append(Text("via API", style="dim"))
 
