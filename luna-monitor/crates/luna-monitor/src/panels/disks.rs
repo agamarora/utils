@@ -51,10 +51,11 @@ pub fn render(frame: &mut Frame, area: Rect, usage: &[DiskInfo], io: &[DiskIO]) 
         let bar_pct = if active_pct > 0.0 { active_pct } else { disk.pct };
 
         // Split into separate spans: active% colored, capacity in neutral color
+        let has_pdh = io_data.is_some();
         let mut spans = Vec::new();
         spans.push(Span::raw(format!("{} ", label)));
 
-        if active_pct > 0.0 {
+        if has_pdh {
             spans.push(Span::styled(
                 format!("{:.0}% active", active_pct),
                 Style::default().fg(colors::pct_color(active_pct)),
