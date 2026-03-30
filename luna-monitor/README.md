@@ -5,6 +5,10 @@ Terminal dashboard for Claude Code developers. Tracks your API usage limits, sys
 ![Windows](https://img.shields.io/badge/platform-Windows-blue)
 ![Rust](https://img.shields.io/badge/language-Rust-orange)
 
+<p align="center">
+  <img src="screenshot.png" alt="luna-monitor dashboard" width="720">
+</p>
+
 ## What it does
 
 - **Claude usage tracking** — 5-hour and 7-day utilization bars with reset timers, pace indicator (rising/steady/falling), and ETA to cap. Network speeds, proxy health (P●), and API reachability (C●) shown inline.
