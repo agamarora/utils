@@ -96,7 +96,7 @@ luna-monitor includes an embedded reverse proxy (`luna-proxy`) that:
 2. Writes `ANTHROPIC_BASE_URL=http://localhost:9120` to Claude Code's `settings.json`
 3. Forwards all requests to `https://api.anthropic.com` untouched
 4. Captures `anthropic-ratelimit-*` headers from responses
-5. Logs rate limit data to `~/.luna-monitor/rate_limits.jsonl`
+5. Logs rate limit data to `~/.luna-monitor/rate-limits.jsonl`
 
 The proxy never modifies request or response bodies. If it crashes, Claude Code falls back to the direct API endpoint — your workflow is never blocked.
 
