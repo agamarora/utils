@@ -37,6 +37,8 @@ pub struct AppState {
     // GPU temp tracking (session max/avg since LHM only gives current)
     pub gpu_temp_max: f32,
     pub gpu_temp_samples: Vec<f32>,
+    // Last fresh proxy timestamp (epoch secs) for staleness display
+    pub last_proxy_ts: Option<f64>,
 }
 
 pub fn run(config: &Config, usage_rx: Option<tokio::sync::mpsc::UnboundedReceiver<UsageData>>) -> io::Result<()> {
@@ -72,6 +74,7 @@ pub fn run(config: &Config, usage_rx: Option<tokio::sync::mpsc::UnboundedReceive
         pace_history: Vec::new(),
         gpu_temp_max: 0.0,
         gpu_temp_samples: Vec::new(),
+        last_proxy_ts: None,
     };
 
     // Prime CPU counters
@@ -82,19 +85,37 @@ pub fn run(config: &Config, usage_rx: Option<tokio::sync::mpsc::UnboundedReceive
     let tick_ms = config.tick_ms();
 
     loop {
-        // Check for new usage data from background
+        // Check for new usage data from API background task
         if let Some(ref mut rx) = usage_rx {
             while let Ok(data) = rx.try_recv() {
-                // Track pace with timestamp (normalize to 0-100)
-                let u = data.five_hour.utilization;
-                let pct = if u > 1.0 { u } else { u * 100.0 };
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
-                state.pace_history.push((now, pct));
-                if state.pace_history.len() > 3 {
-                    state.pace_history.remove(0);
+                // API always provides per-model breakdown (proxy doesn't have this)
+                state.usage.seven_day_opus = data.seven_day_opus.clone();
+                state.usage.seven_day_sonnet = data.seven_day_sonnet.clone();
+                state.usage.fetched_at = data.fetched_at;
+                state.usage.error = data.error.clone();
+
+                // API only overwrites utilization if proxy has been dead (>10 min)
+                let proxy_dead = state.last_proxy_ts
+                    .map(|ts| {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+                        now - ts > 600.0
+                    })
+                    .unwrap_or(true); // no proxy data ever seen
+
+                if proxy_dead {
+                    let u = data.five_hour.utilization;
+                    let pct = if u > 1.0 { u } else { u * 100.0 };
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+                    state.pace_history.push((now, pct));
+                    if state.pace_history.len() > 3 {
+                        state.pace_history.remove(0);
+                    }
+                    state.usage.five_hour = data.five_hour;
+                    state.usage.seven_day = data.seven_day;
+                    state.usage.source = data.source;
                 }
-                state.usage = data;
             }
         }
 
@@ -126,12 +147,14 @@ pub fn run(config: &Config, usage_rx: Option<tokio::sync::mpsc::UnboundedReceive
         }
 
         if let Some(entry) = state.rate_limit_collector.collect() {
-            if state.rate_limit_collector.is_fresh() && state.usage.source != "api" {
+            if state.rate_limit_collector.is_fresh() {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+                state.last_proxy_ts = Some(now);
+
                 if let Some(util) = entry.five_h_utilization {
-                    // Track pace from proxy data too (normalize to 0-100)
+                    // Track pace from proxy data (normalize to 0-100)
                     let pct = if util > 1.0 { util } else { util * 100.0 };
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
                     state.pace_history.push((now, pct));
                     if state.pace_history.len() > 3 {
                         state.pace_history.remove(0);
@@ -307,6 +330,7 @@ fn render(frame: &mut ratatui::Frame, area: Rect, state: &AppState, config: &Con
             pace,
             &eta,
             &net,
+            state.last_proxy_ts,
         );
         idx += 1;
     }

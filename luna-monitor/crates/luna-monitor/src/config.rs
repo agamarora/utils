@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 fn default_refresh() -> f64 { 2.0 }
-fn default_cache_ttl() -> u64 { 30 }
+fn default_cache_ttl() -> u64 { 600 }
 fn default_true() -> bool { true }
 fn default_port() -> u16 { paths::DEFAULT_PORT }
 
@@ -116,7 +116,7 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
         assert_eq!(config.refresh_seconds, 2.0);
-        assert_eq!(config.cache_ttl_seconds, 30);
+        assert_eq!(config.cache_ttl_seconds, 600);
         assert!(config.gpu_enabled);
         assert!(config.claude_enabled);
         assert!(config.proxy_enabled.is_none());

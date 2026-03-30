@@ -46,9 +46,10 @@ cd luna-monitor && cargo build --release
 
 **Collectors:** system.rs (sysinfo), claude.rs (OAuth + usage API), claude_local.rs (JSONL scanner), rate_limit.rs (proxy data), gpu.rs (nvml + LHM fallback), lhm.rs (LibreHardwareMonitor HTTP auto-detection)
 
-**Panels:** claude_status (5h/7d bars + pace + ETA + net speeds + P●/C● status dots), cpu (sparkline + hbar), memory, gpu, disks (I/O + active %), network (standalone when Claude disabled), temps, processes
+**Panels:** claude_status (5h/7d bars + pace + ETA + net speeds + P●/C● status dots + freshness indicator), cpu (sparkline + hbar), memory, gpu, disks (I/O + active %), network (standalone when Claude disabled), temps, processes
 
 **Key design choices:**
+- Proxy data is the authority for utilization; API demoted to 10-min background backup for per-model breakdown
 - Proxy runs as a separate process, managed by proxy_lifecycle.rs (spawn, PID file, crash recovery)
 - LHM auto-detected at localhost:8085, cached 10s, graceful fallback
 - PDH disk active % via Windows FFI (platform_win.rs)

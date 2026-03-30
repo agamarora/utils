@@ -11,8 +11,8 @@ Terminal dashboard for Claude Code developers. Tracks your API usage limits, sys
 
 ## What it does
 
-- **Claude usage tracking** — 5-hour and 7-day utilization bars with reset timers, pace indicator (rising/steady/falling), and ETA to cap. Network speeds, proxy health (P●), and API reachability (C●) shown inline.
-- **Embedded proxy** — sits between Claude Code and the API, captures rate limit headers in real time. No polling, no scraping.
+- **Claude usage tracking** — 5-hour and 7-day utilization bars with reset timers, pace indicator (rising/steady/falling), ETA to cap, and data freshness indicator. Proxy data is the primary source; API polls every 10 minutes as backup.
+- **Embedded proxy** — sits between Claude Code and the API, captures rate limit headers in real time. No polling, no scraping. Proxy data always takes priority over API data for utilization display.
 - **System dashboard** — CPU, memory, GPU, disk I/O, temperatures, top processes
 - **Auto-detection** — finds LibreHardwareMonitor for real CPU frequency and temps, NVIDIA GPU via NVML, falls back gracefully when either is missing
 
@@ -69,7 +69,7 @@ With Claude enabled (~30 rows):
 │ 7d: 5.1% (resets in 4d 12h)           │
 │ ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
 │ Net ↓1.2 Mb/s ↑5 Kb/s  avg ↓1.0 ↑3   │
-│ P● C● · → steady · ETA ~2h 15m to cap │
+│ P● C● · → steady · ETA ~2h 15m · updated: just now │
 ╰────────────────────────────────────────╯
 ╭ CPU ────────────────╮╭ Temps ──────────╮
 │ 14.5% @ 4.21 GHz   ││ CPU: 39°C      │

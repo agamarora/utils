@@ -59,6 +59,13 @@ impl ClaudeCollector {
         }
     }
 
+    /// Return the plan name read from credentials (e.g. "Pro", "Max 5x").
+    /// Available before the first API call — only needs credentials.json.
+    pub fn plan_name(&mut self) -> Option<String> {
+        let _ = self.read_credentials();
+        self.plan_tier.clone()
+    }
+
     fn read_credentials(&mut self) -> Result<(), String> {
         if self.credentials_last_read.elapsed() < Duration::from_secs(CREDENTIAL_REREAD_SECS) {
             if self.access_token.is_some() {

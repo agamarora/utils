@@ -23,6 +23,7 @@ pub fn render(
     pace: &str,
     eta: &str,
     net: &NetSpeeds,
+    last_proxy_ts: Option<f64>,
 ) {
     let title = if usage.plan_name.is_empty() {
         " Claude Usage ".to_string()
@@ -115,6 +116,14 @@ pub fn render(
         parts.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
         parts.push(Span::styled(eta, Style::default().fg(Color::DarkGray)));
     }
+
+    // Freshness indicator: "updated: just now" or "updated: 3m ago"
+    let freshness = format_freshness(last_proxy_ts);
+    if !freshness.is_empty() {
+        parts.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+        parts.push(Span::styled(freshness, Style::default().fg(Color::DarkGray)));
+    }
+
     lines.push(Line::from(parts));
 
     let paragraph = Paragraph::new(lines);
@@ -168,6 +177,29 @@ fn format_reset(resets_at: &str) -> String {
 /// API may return 0-1 (fraction) or 0-100 (already percentage).
 fn as_pct(v: f64) -> f64 {
     if v > 1.0 { v } else { v * 100.0 }
+}
+
+fn format_freshness(last_proxy_ts: Option<f64>) -> String {
+    let ts = match last_proxy_ts {
+        Some(t) => t,
+        None => return String::new(),
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    let age_secs = (now - ts).max(0.0) as u64;
+    if age_secs < 60 {
+        "updated: just now".to_string()
+    } else {
+        let mins = age_secs / 60;
+        if mins >= 60 {
+            let hours = mins / 60;
+            format!("updated: {}h ago", hours)
+        } else {
+            format!("updated: {}m ago", mins)
+        }
+    }
 }
 
 fn format_duration(seconds: f64) -> String {
