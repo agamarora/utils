@@ -14,7 +14,7 @@ luna-monitor gives you that answer at a glance. One terminal window shows your 5
 
 **How it works:** A tiny embedded proxy sits between Claude Code and the Anthropic API. Every response carries rate-limit headers, and the proxy captures them silently. Your requests and responses pass through untouched. The numbers you see are real, live, and straight from Anthropic. The status line tells you when data was last updated: "just now" during active use, "3m ago" when idle.
 
-If the proxy crashes, Claude Code falls back to the direct API. Your workflow is never blocked.
+If the proxy stops, run `luna-monitor --disable-proxy` to restore direct API access.
 
 **Get started:**
 

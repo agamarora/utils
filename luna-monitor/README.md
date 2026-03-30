@@ -19,7 +19,7 @@ luna-monitor ships with a tiny embedded proxy that sits between Claude Code and 
 
 This means the usage numbers you see are real, live, straight from Anthropic's servers. Not scraped. Not estimated. Not stale. The status line tells you exactly when the data was last updated: "just now" during active use, "3m ago" when you've been idle.
 
-If the proxy ever goes down, Claude Code falls back to the direct API automatically. Your workflow is never blocked.
+If the proxy stops, run `luna-monitor --disable-proxy` to restore direct API access.
 
 ## Get started
 
