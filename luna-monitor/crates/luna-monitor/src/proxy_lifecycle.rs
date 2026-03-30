@@ -68,18 +68,17 @@ impl ProxyManager {
             return true;
         }
 
-        // Find luna-proxy binary
-        let proxy_bin = match find_proxy_binary() {
-            Some(p) => p,
-            None => {
-                warn!("luna-proxy binary not found");
+        // Spawn self with --proxy-mode (single binary)
+        let self_exe = match std::env::current_exe() {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("Cannot find own executable: {}", e);
                 return false;
             }
         };
 
-        // Spawn as detached process
-        info!("Starting luna-proxy from {:?}", proxy_bin);
-        let result = spawn_detached(&proxy_bin, &["--port", &self.port.to_string()]);
+        info!("Starting embedded proxy from {:?}", self_exe);
+        let result = spawn_detached(&self_exe, &["--proxy-mode", "--port", &self.port.to_string()]);
 
         if !result {
             warn!("Failed to start luna-proxy");
@@ -122,47 +121,6 @@ impl ProxyManager {
             remove_proxy_setting();
         }
     }
-}
-
-fn find_proxy_binary() -> Option<PathBuf> {
-    // 1. Same directory as luna-monitor binary
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let name = if cfg!(windows) { "luna-proxy.exe" } else { "luna-proxy" };
-            let candidate = dir.join(name);
-            if candidate.exists() {
-                return Some(candidate);
-            }
-        }
-    }
-
-    // 2. PATH lookup
-    let name = if cfg!(windows) { "luna-proxy.exe" } else { "luna-proxy" };
-    if let Ok(output) = std::process::Command::new("where").arg(name).output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout);
-            let first_line = path.lines().next()?;
-            let p = PathBuf::from(first_line.trim());
-            if p.exists() {
-                return Some(p);
-            }
-        }
-    }
-
-    // Unix fallback
-    if !cfg!(windows) {
-        if let Ok(output) = std::process::Command::new("which").arg("luna-proxy").output() {
-            if output.status.success() {
-                let path = String::from_utf8_lossy(&output.stdout);
-                let p = PathBuf::from(path.trim());
-                if p.exists() {
-                    return Some(p);
-                }
-            }
-        }
-    }
-
-    None
 }
 
 #[cfg(windows)]

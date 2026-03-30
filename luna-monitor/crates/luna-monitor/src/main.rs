@@ -5,6 +5,7 @@ mod config;
 mod collectors;
 #[allow(dead_code)]
 mod panels;
+mod proxy;
 mod proxy_lifecycle;
 #[allow(dead_code)]
 mod platform_win;
@@ -45,10 +46,30 @@ struct Args {
 
     #[arg(long, help = "Check for updates")]
     update: bool,
+
+    // Hidden flag: run as embedded proxy server (spawned by proxy_lifecycle)
+    #[arg(long, hide = true)]
+    proxy_mode: bool,
+
+    #[arg(long, default_value_t = paths::DEFAULT_PORT, hide = true)]
+    port: u16,
+
+    #[arg(long, default_value = paths::DEFAULT_TARGET, hide = true)]
+    target: String,
 }
 
 fn main() {
     let args = Args::parse();
+
+    // --proxy-mode: run as embedded proxy server (no dashboard)
+    if args.proxy_mode {
+        let level = if args.verbose { "debug" } else { "info" };
+        tracing_subscriber::fmt()
+            .with_env_filter(level)
+            .init();
+        run_proxy_mode(args.port, &args.target);
+        return;
+    }
 
     // Init tracing
     let level = if args.verbose { "debug" } else { "warn" };
@@ -159,6 +180,204 @@ fn main() {
     if let Some(pm) = proxy_manager {
         pm.cleanup();
     }
+}
+
+/// Run as embedded proxy server. This is spawned by proxy_lifecycle as a detached process.
+fn run_proxy_mode(port: u16, target: &str) {
+    use hyper::body::Incoming;
+    use hyper::server::conn::http1;
+    use hyper::service::service_fn;
+    use hyper::Request;
+    use hyper_util::rt::TokioIo;
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use tracing::{error, info};
+
+    let target = target.trim_end_matches('/').to_string();
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("Failed to create tokio runtime");
+
+    rt.block_on(async {
+        // Ensure ~/.luna-monitor/ exists
+        if let Some(dir) = paths::luna_dir() {
+            let _ = std::fs::create_dir_all(&dir);
+        }
+
+        // Rotate JSONL
+        if let Some(path) = paths::rate_limit_file() {
+            proxy::jsonl::rotate(&path, paths::MAX_JSONL_ENTRIES);
+        }
+
+        // Write PID file
+        write_pid_file();
+
+        // Clean stale lockfile
+        clean_stale_settings();
+
+        // Shutdown handler
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let shutdown_tx = Arc::new(std::sync::Mutex::new(Some(shutdown_tx)));
+        let shutdown_tx_clone = shutdown_tx.clone();
+        ctrlc::set_handler(move || {
+            info!("Shutting down...");
+            remove_pid_file();
+            if let Some(tx) = shutdown_tx_clone.lock().unwrap().take() {
+                let _ = tx.send(());
+            }
+        })
+        .expect("Failed to set Ctrl-C handler");
+
+        // Build proxy state
+        let jsonl_path = paths::rate_limit_file().expect("Cannot determine home directory");
+        let state = Arc::new(proxy::server::ProxyState::new(target, jsonl_path));
+
+        // Bind to port (try port through port+9)
+        let mut bound_port = None;
+        for p in port..port + 10 {
+            let addr = SocketAddr::from(([127, 0, 0, 1], p));
+            match tokio::net::TcpListener::bind(addr).await {
+                Ok(listener) => {
+                    info!("luna-monitor proxy listening on 127.0.0.1:{}", p);
+                    bound_port = Some((listener, p));
+                    break;
+                }
+                Err(e) => {
+                    if p == port {
+                        info!("Port {} in use ({}), trying next...", p, e);
+                    }
+                }
+            }
+        }
+
+        let (listener, _port) = match bound_port {
+            Some(v) => v,
+            None => {
+                error!("Could not bind to any port {}-{}", port, port + 9);
+                remove_pid_file();
+                std::process::exit(1);
+            }
+        };
+
+        // Serve
+        loop {
+            tokio::select! {
+                result = listener.accept() => {
+                    match result {
+                        Ok((stream, _addr)) => {
+                            let state = state.clone();
+                            tokio::spawn(async move {
+                                let io = TokioIo::new(stream);
+                                let service = service_fn(move |req: Request<Incoming>| {
+                                    let state = state.clone();
+                                    async move {
+                                        route(req, state).await
+                                    }
+                                });
+                                if let Err(e) = http1::Builder::new()
+                                    .serve_connection(io, service)
+                                    .await
+                                {
+                                    tracing::debug!("Connection error: {}", e);
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            error!("Accept error: {}", e);
+                        }
+                    }
+                }
+                _ = &mut shutdown_rx => {
+                    info!("Shutdown signal received");
+                    break;
+                }
+            }
+        }
+
+        remove_pid_file();
+    });
+}
+
+async fn route(
+    req: hyper::Request<hyper::body::Incoming>,
+    state: std::sync::Arc<proxy::server::ProxyState>,
+) -> Result<hyper::Response<http_body_util::Full<bytes::Bytes>>, hyper::Error> {
+    if req.uri().path() == "/health" && req.method() == hyper::Method::GET {
+        proxy::health::handle(req, state).await
+    } else {
+        proxy::server::handle(req, state).await
+    }
+}
+
+fn write_pid_file() {
+    if let Some(path) = paths::proxy_pid_file() {
+        let pid = std::process::id();
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let _ = std::fs::write(&path, format!("{} {}", pid, ts));
+    }
+}
+
+fn remove_pid_file() {
+    if let Some(path) = paths::proxy_pid_file() {
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+fn clean_stale_settings() {
+    let pid_path = match paths::proxy_pid_file() {
+        Some(p) => p,
+        None => return,
+    };
+    let content = match std::fs::read_to_string(&pid_path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let parts: Vec<&str> = content.trim().split_whitespace().collect();
+    if parts.is_empty() {
+        return;
+    }
+    let pid: u32 = match parts[0].parse() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    if is_pid_alive(pid) {
+        return;
+    }
+
+    tracing::info!("Cleaning stale proxy config from PID {}", pid);
+    proxy_lifecycle::remove_proxy_setting();
+    let _ = std::fs::remove_file(&pid_path);
+}
+
+#[cfg(windows)]
+fn is_pid_alive(pid: u32) -> bool {
+    use std::ptr;
+    const PROCESS_QUERY_INFORMATION: u32 = 0x0400;
+    extern "system" {
+        fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> *mut std::ffi::c_void;
+        fn CloseHandle(hObject: *mut std::ffi::c_void) -> i32;
+    }
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_INFORMATION, 0, pid);
+        if handle.is_null() || handle == ptr::null_mut() {
+            false
+        } else {
+            CloseHandle(handle);
+            true
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn is_pid_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
 fn first_run_prompt(config: &mut Config) {
