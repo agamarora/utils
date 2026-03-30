@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-A collection of standalone utility scripts for Windows. Each tool lives in its own directory with its own `requirements.txt` and `README.md`. This is **not** a package — there's no shared build system, no monorepo tooling, and no inter-tool dependencies.
+A collection of standalone utilities for Windows. Each tool lives in its own directory with its own README. This is **not** a monorepo — there's no shared build system and no inter-tool dependencies.
 
 ## Running the Monitor
 
@@ -31,31 +31,31 @@ The monitor is one 590-line Python file with no internal modules. It uses Rich `
 
 **Key design choice**: LHM data is fetched via `powershell Invoke-WebRequest` subprocess rather than `requests`/`urllib` to avoid adding a dependency. This is intentional.
 
-## Running luna-monitor
+### luna-monitor/ (Rust workspace)
+
+Terminal dashboard for Claude Code developers. Rust workspace with 3 crates, 67 tests.
 
 ```bash
-pip install luna-monitor && luna-monitor
+cd luna-monitor && cargo build --release
+./target/release/luna-monitor.exe
 ```
 
-On first run, it asks whether to enable the embedded proxy for live usage tracking. Use `luna-monitor --doctor` to change this later.
+**Workspace layout:** `crates/` with:
+- `luna-common/` — shared types (UsageData, ProxyHealth, RateLimitEntry), path constants
+- `luna-monitor/` — dashboard binary (ratatui TUI, collectors, panels)
+- `luna-proxy/` — embedded reverse proxy binary (captures rate limit headers)
 
-### luna-monitor/ (pip-installable package)
+**Collectors:** system.rs (sysinfo), claude.rs (OAuth + usage API), claude_local.rs (JSONL scanner), rate_limit.rs (proxy data), gpu.rs (nvml + LHM fallback), lhm.rs (LibreHardwareMonitor HTTP auto-detection)
 
-Modular dashboard with collectors, panels, and an embedded proxy. ~3600 lines across 30 source files. 327 tests. Published on [PyPI](https://pypi.org/project/luna-monitor/).
-
-**Source layout:** `src/luna_monitor/` with subdirectories:
-- `collectors/` — data gathering (claude.py, claude_local.py, rate_limit.py, system.py, gpu.py, platform_win.py)
-- `panels/` — Rich renderables (claude_status.py, claude_burndown.py, cpu.py, memory.py, gpu.py, disks.py, network.py, temps.py, processes.py)
-- `proxy/` — embedded reverse proxy (server.py, lifecycle.py, watchdog.py, cli.py)
-- `ui/` — shared chart and color utilities (charts.py, colors.py)
+**Panels:** claude_status (5h/7d bars + pace + proxy health), cpu (sparkline + hbar), memory, gpu, disks (I/O + active %), network, temps, processes
 
 **Key design choices:**
-- Proxy runs as a daemon thread with its own asyncio event loop, not blocking the Rich UI
-- `auto_decompress=False` in aiohttp ClientSession avoids double-decompression (ZlibError)
-- Settings.json modified via read-parse-merge with atomic temp-file-plus-rename writes
-- WMI for temps (primary) with LibreHardwareMonitor HTTP fallback
-- Config consolidated to `~/.luna-monitor/config.json` (single path)
+- Proxy runs as a separate process, managed by proxy_lifecycle.rs (spawn, PID file, crash recovery)
+- LHM auto-detected at localhost:8085, cached 10s, graceful fallback
+- PDH disk active % via Windows FFI (platform_win.rs)
+- Settings.json modified via atomic temp-file-plus-rename writes
+- Config at `~/.luna-monitor/config.json`
 
 ## Adding a New Tool
 
-Create a new directory with the script, `requirements.txt`, and `README.md`. Add an entry to the root `README.md` under Tools.
+Create a new directory with the tool and a `README.md`. Add an entry to the root `README.md` under Tools.

@@ -1,8 +1,8 @@
 # Utils
 
-A collection of lightweight, open-source utility scripts built for daily use on Windows. Each tool lives in its own folder with its own README, dependencies, and setup instructions.
+A collection of lightweight, open-source utilities built for daily use on Windows. Each tool lives in its own folder with its own README.
 
-Built with Python. MIT licensed. Contributions welcome.
+MIT licensed. Contributions welcome.
 
 ## Tools
 
@@ -20,8 +20,6 @@ A real-time system dashboard that runs entirely in your terminal. Think Task Man
 - Network speeds (current, average, peak)
 - Top processes split by CPU and RAM usage
 
-**Why it exists:** Windows Task Manager is fine, but it's a mouse-heavy GUI that takes up a full window. This fits in a terminal tab, refreshes every 2 seconds, and shows everything at a glance. It also pulls real CPU clock speeds and accurate disk I/O metrics that most lightweight monitors miss.
-
 **Stack:** Python, psutil, Rich, pynvml, Windows PDH API, LibreHardwareMonitor
 
 ```bash
@@ -30,30 +28,23 @@ cd monitor && pip install -r requirements.txt && python monitor.py
 
 ### [luna-monitor/](luna-monitor/) — Claude Code Developer Dashboard
 
-Everything from monitor/ plus live Claude Code usage tracking via an embedded reverse proxy. The dashboard every Claude Code developer needs in their second terminal tab.
+Everything from monitor/ plus live Claude Code usage tracking via an embedded reverse proxy. Built in Rust for fast startup and low resource usage.
 
 **What it shows:**
-- Live session (5h) and weekly (7d) usage bars with reset countdown timers
-- Usage burndown waveform with time-to-limit prediction
+- Live 5-hour and 7-day usage bars with reset countdown timers and pace indicator
 - API health: latency, request count, 429 error tracking
-- CPU, GPU, memory, disk, network, temperatures (WMI or LibreHardwareMonitor)
-- Top processes with Claude processes highlighted
+- CPU sparkline with real frequency (via LibreHardwareMonitor auto-detection)
+- GPU, memory, disk I/O with active %, network, temperatures, top processes
 - `--doctor` interactive setup wizard for proxy configuration
 
-**How usage tracking works:** An embedded reverse proxy captures rate limit headers from Claude Code API responses. No extra API calls needed. Five safety layers (crash recovery, watchdog, lockfile, signal handlers, settings.json backup) ensure clean lifecycle management.
+**How usage tracking works:** An embedded reverse proxy captures rate limit headers from Claude Code API responses. No extra API calls needed. If the proxy crashes, Claude Code falls back to the direct API — your workflow is never blocked.
 
-**Stack:** Python, psutil, Rich, aiohttp, pynvml (optional)
+**Stack:** Rust, ratatui, sysinfo, reqwest, nvml-wrapper, Windows PDH API
 
 ```bash
-pip install luna-monitor && luna-monitor
+cd luna-monitor && cargo build --release
+./target/release/luna-monitor.exe
 ```
-
-## Adding New Tools
-
-Each tool gets its own directory with:
-- The script(s)
-- A `requirements.txt` (if it has Python deps)
-- A `README.md` explaining what it does and how to use it
 
 ## License
 

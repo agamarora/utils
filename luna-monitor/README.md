@@ -1,191 +1,190 @@
 # luna-monitor
 
-Your system + Claude Code usage in one terminal. The dashboard every Claude Code developer needs running in their second tab.
+Terminal dashboard for Claude Code developers. Tracks your API usage limits, system resources, and proxy health — all in one screen.
 
-![Python](https://img.shields.io/badge/python-3.10+-blue) ![Windows](https://img.shields.io/badge/platform-Windows-lightgrey) ![License](https://img.shields.io/badge/license-MIT-green)
+![Windows](https://img.shields.io/badge/platform-Windows-blue)
+![Rust](https://img.shields.io/badge/language-Rust-orange)
+
+## What it does
+
+- **Claude usage tracking** — 5-hour and 7-day utilization bars with reset timers and pace indicator (rising/steady/falling)
+- **Embedded proxy** — sits between Claude Code and the API, captures rate limit headers in real time. No polling, no scraping.
+- **System dashboard** — CPU, memory, GPU, disk I/O, network, temperatures, top processes
+- **Auto-detection** — finds LibreHardwareMonitor for real CPU frequency and temps, NVIDIA GPU via NVML, falls back gracefully when either is missing
 
 ## Install
 
-**pip (recommended):**
+### From source (recommended)
+
+Requires [Rust](https://rustup.rs/) (1.70+).
+
 ```bash
-pip install luna-monitor
-luna-monitor
-```
-
-**Standalone .exe (no Python needed):**
-Download `luna-monitor.exe` from the [latest release](https://github.com/agamarora/utils/releases/latest) and run it.
-
-**Claude Code one-liner:**
-Paste this into your Claude Code terminal:
-```
-Clone the luna-monitor tool from https://github.com/agamarora/utils, cd into luna-monitor, install it with pip install luna-monitor, and run luna-monitor to verify it works. If there are any errors, fix them. Show me the output.
-```
-
-**From source:**
-```bash
-git clone https://github.com/agamarora/utils.git
+git clone https://github.com/anthropics/utils.git
 cd utils/luna-monitor
-pip install --user -e .
+cargo build --release
+```
+
+The binary is at `target/release/luna-monitor.exe`.
+
+### Pre-built binary
+
+Download from [Releases](../../releases) and put it somewhere on your PATH.
+
+## First run
+
+```bash
 luna-monitor
 ```
 
-> **Windows note:** If `luna-monitor` isn't found after install, use `python -m luna_monitor` instead.
+On first launch it asks whether to enable the embedded proxy for live usage tracking. The proxy rewrites Claude Code's `settings.json` to route API calls through `localhost:9120`, captures rate limit headers, and forwards everything untouched.
 
-## What You Get
+If you skip this, luna-monitor still works — it just won't have usage data until you enable the proxy later.
 
-Two sections in one full-screen terminal dashboard:
+## CLI flags
 
-**The Soul — Claude Code Usage (top of screen, cyan border)**
-- Live session (5h) and weekly (7d) usage bars with reset countdown timers
-- Usage burndown waveform — tracks consumption over time, projects when you'll hit your limit
-- Plan tier display (Pro, Max 5x, Max 20x)
-- API health: latency, request count, 429 error tracking
-- Proxy status indicator ("via proxy" / "via API")
+| Flag | Description |
+|---|---|
+| `--doctor` | Interactive setup menu — enable/disable proxy, check health |
+| `--enable-proxy` | Enable proxy and write settings.json (non-interactive) |
+| `--disable-proxy` | Remove proxy from settings.json |
+| `--no-claude` | Hide Claude usage panels |
+| `--no-gpu` | Hide GPU panel |
+| `--offline` | No network requests (disables API + proxy health checks) |
+| `--refresh <secs>` | Refresh interval (default: 2.0) |
+| `--verbose` | Debug logging |
+| `--update` | Check for updates |
 
-**The Body — System Monitoring**
-- CPU rolling waveform chart (area graph, like Task Manager) + real boost clock speed
-- Memory (RAM + swap) and GPU (NVIDIA) side-by-side with matched heights
-- Disk active time % (same counter as Task Manager) + per-drive R/W throughput
-- Network speeds: current, average, peak (rolling 60s window)
-- CPU and GPU temperatures (WMI or LibreHardwareMonitor)
-- Top processes by CPU and RAM — Claude processes highlighted in cyan
+## Dashboard layout
 
-## Live Usage Tracking via Proxy
-
-luna-monitor includes an embedded reverse proxy that captures real-time usage data from Claude Code API responses. This is how you get accurate session/weekly utilization without relying on the broken usage API endpoint.
-
-**How it works:**
-1. On first run, luna-monitor asks if you want to enable live usage tracking
-2. If yes, it starts a local proxy on port 9120 and sets `ANTHROPIC_BASE_URL` in `~/.claude/settings.json`
-3. All Claude Code API traffic flows through the proxy — luna-monitor reads rate limit headers from responses
-4. Headers captured: `anthropic-ratelimit-unified-5h-utilization`, `anthropic-ratelimit-unified-7d-utilization`
-5. On exit (Ctrl+C, signals, crashes), everything is cleaned up automatically
-
-**Safety layers:**
-- Crash recovery: detects stale config from previous crashes and cleans up on next start
-- Watchdog: daemon thread monitors proxy health, auto-restarts on failure (3-failure threshold)
-- Lockfile: PID-based lockfile prevents duplicate proxy instances
-- Signal handlers: atexit + SIGTERM + SIGINT ensure cleanup
-- Settings.json backup: original file backed up before modification, restored on cleanup
-
-**The proxy is fully optional.** Without it, luna-monitor works as a system monitor. The proxy just adds live Claude usage data.
-
-## CLI Flags
+With Claude enabled (~30 rows):
 
 ```
-luna-monitor                    # full dashboard (prompts for proxy on first run)
-luna-monitor --doctor           # interactive setup: enable/disable proxy or reset
-luna-monitor --enable-proxy     # enable proxy without interactive prompt
-luna-monitor --disable-proxy    # disable proxy, restore settings.json
-luna-monitor --no-gpu           # skip GPU panel (no NVIDIA card)
-luna-monitor --no-claude        # skip Claude panels (system monitor only)
-luna-monitor --offline          # no network requests at all
-luna-monitor --refresh 1        # faster refresh (default: 2s)
-luna-monitor --version          # print version
+╭ Claude Usage ───────────────────────────╮
+│ 5h: 12.3% ↑ rising  (resets in 3h 42m) │
+│ ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
+│ 7d: 5.1%             (resets in 4d 12h) │
+│ ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
+│ via proxy  23ms  142 reqs  0 429s       │
+╰─────────────────────────────────────────╯
+╭ CPU: 14.5% @ 4.21 GHz ▁▂▃▅▇█▅▃▂▁ ─────╮
+│ ██████████████░░░░░░░░░░░░░░░░░░░░░░░░░ │
+╰─────────────────────────────────────────╯
+╭ Memory ──────────────╮╭ GPU: RTX 3060 ──╮
+│ RAM: 10.5/15.8 GB    ││ Util: 7%        │
+╰──────────────────────╯╰─────────────────╯
+╭ Temperatures ───────────────────────────╮
+│ CPU Core #1: 62°C  CPU Core #2: 65°C   │
+╰─────────────────────────────────────────╯
+╭ Network ────────────────────────────────╮
+│ ↓ 1.2 Mb/s / avg 800 Kb/s / peak 5 Mb │
+╰─────────────────────────────────────────╯
+╭ Disks ──────────────────────────────────╮
+│ D: 42% active  R: 15.3 MB/s  W: 2.1 MB│
+╰─────────────────────────────────────────╯
+╭ Processes ──────────────────────────────╮
+│ claude.exe  15.6%    chrome.exe  680 MB │
+╰─────────────────────────────────────────╯
 ```
 
-### --doctor
+## How the proxy works
 
-Interactive setup wizard with three options:
-1. **Enable proxy** — route Claude Code through luna-monitor for live usage %
-2. **Disable proxy** — direct Claude Code, keep luna-monitor for system metrics
-3. **Reset everything** — remove all luna-monitor config, restore vanilla Claude Code
+luna-monitor includes an embedded reverse proxy (`luna-proxy`) that:
 
-## How Claude Usage Tracking Works
+1. Starts on `localhost:9120` (falls back to 9121-9129 if busy)
+2. Writes `ANTHROPIC_BASE_URL=http://localhost:9120` to Claude Code's `settings.json`
+3. Forwards all requests to `https://api.anthropic.com` untouched
+4. Captures `anthropic-ratelimit-*` headers from responses
+5. Logs rate limit data to `~/.luna-monitor/rate_limits.jsonl`
 
-**With proxy (recommended):** luna-monitor reads rate limit headers directly from Claude Code API responses. No extra API calls needed — the data comes from headers Anthropic already sends on every completion request.
+The proxy never modifies request or response bodies. If it crashes, Claude Code falls back to the direct API endpoint — your workflow is never blocked.
 
-**Without proxy (fallback):** luna-monitor reads your existing Claude Code OAuth credentials to fetch usage data from the Anthropic API. Note: this endpoint has aggressive rate limiting (known issue with 7+ open GitHub issues).
-
-- Reads from `~/.claude/.credentials.json` — the file Claude Code already created when you logged in
-- Tokens stay in memory only, never written to disk
-- All requests go through a hardcoded domain allowlist
-- If the token expires, luna-monitor refreshes it automatically
-
-**Just run `claude login` first.** If you've used Claude Code, you're already set.
-
-> **API stability note:** If Anthropic changes their API, the Claude panels degrade gracefully while system panels keep working. The tool never crashes.
-
-## Optional: Get More Data
-
-**GPU monitoring** — install pynvml:
-```bash
-pip install pynvml
-```
-Without it, the GPU panel is skipped. No crash, no error.
-
-**CPU temps** — luna-monitor tries these sources in order:
-1. **WMI** (via `pip install wmi`) — queries Windows Management Instrumentation directly
-2. **LibreHardwareMonitor** — if running with web server on port 8085
-3. Falls back to "N/A" gracefully if neither is available
-
-## Configuration
-
-Optional. Create `~/.luna-monitor/config.json`:
-
-```json
-{
-  "proxy_enabled": true,
-  "proxy_port": 9120,
-  "cache_ttl_seconds": 30,
-  "refresh_seconds": 2.0,
-  "drives": ["C:\\", "D:\\"]
-}
-```
-
-Everything has sensible defaults. Most people never need this file.
-
-## Add as a Terminal Profile (always one click away)
-
-### Windows Terminal
-
-Open Settings (Ctrl+,) > Add a new profile > New empty profile:
-
-- **Name:** Luna Monitor
-- **Command line:** `python -m luna_monitor`
-- **Starting directory:** `%USERPROFILE%`
-- **Icon:** pick any moon/monitor emoji or leave default
-
-Now luna-monitor is always one click away in your terminal dropdown.
-
-### Launcher Scripts (optional)
-
-If you want a simple shortcut you can double-click or pin to taskbar:
-
-**PowerShell (`luna.ps1`):**
-```powershell
-# Save this as luna.ps1 anywhere, right-click > Run with PowerShell
-python -m luna_monitor
-```
-
-**Bash (`luna.sh`):**
-```bash
-#!/bin/bash
-# Save this as luna.sh, chmod +x luna.sh
-python -m luna_monitor "$@"
-```
-
-**Windows Batch (`luna.bat`):**
-```batch
-@echo off
-python -m luna_monitor %*
-```
-
-Drop any of these in a folder on your PATH and you can just type `luna` from anywhere.
-
-## Platform
-
-Windows-first. The architecture separates all Windows-specific code (`platform_win.py`) behind a clean abstraction. Linux/macOS stubs exist — real implementations welcome as PRs.
-
-## 327 Tests
+### Proxy management
 
 ```bash
-cd luna-monitor
-pip install pytest
-python -m pytest tests/ -q
+luna-monitor --doctor        # Interactive menu
+luna-monitor --enable-proxy  # Enable non-interactively
+luna-monitor --disable-proxy # Disable and clean up settings.json
 ```
 
-Every collector, every panel, every edge case. OAuth flow, burndown prediction, proxy lifecycle, crash recovery, watchdog restart, process correlation, graceful degradation — all tested.
+## Optional: LibreHardwareMonitor
+
+For real CPU clock speeds and temperature readings, install [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) and enable its web server:
+
+1. Open LibreHardwareMonitor
+2. Options → Web Server → Enable
+3. Keep the default port (8085)
+
+luna-monitor auto-detects LHM at `localhost:8085` — no configuration needed. Without LHM, you get base frequency from sysinfo and a "No sensors" message in the temps panel.
+
+## Optional: NVIDIA GPU
+
+GPU monitoring requires an NVIDIA GPU with drivers installed. The `nvml` library is loaded automatically. If no NVIDIA GPU is found, luna-monitor tries LHM as a fallback. If neither is available, the GPU panel shows "No GPU".
+
+## Troubleshooting
+
+**"Resize terminal (min 60x15)"** — Your terminal is too small. Widen it to at least 60 columns and 15 rows.
+
+**No Claude usage data** — The proxy isn't running or hasn't captured any data yet. Run `luna-monitor --doctor` to check proxy health.
+
+**"via API" instead of "via proxy"** — The proxy isn't active. Run `luna-monitor --enable-proxy` to set it up.
+
+**Disk I/O shows 0 B/s** — PDH counters need one tick cycle to produce data. Wait 2-4 seconds. If a drive only shows capacity (no active %), it means PDH doesn't have a counter for that physical disk.
+
+**Temperatures show "No sensors"** — Install LibreHardwareMonitor and enable its web server on port 8085.
+
+**GPU shows 0°C** — NVML sometimes reports 0°C at idle. This is normal for some GPU models.
+
+**Proxy won't start** — Another process is using ports 9120-9129. Check with `netstat -ano | findstr 9120`.
+
+**settings.json not updating** — luna-monitor writes settings.json atomically (temp file + rename). If Claude Code is mid-write at the same time, retry with `--enable-proxy`.
+
+## Project structure
+
+```
+luna-monitor/
+├── Cargo.toml              # Workspace root
+├── crates/
+│   ├── luna-common/        # Shared types, paths, constants
+│   ├── luna-monitor/       # Dashboard binary
+│   │   └── src/
+│   │       ├── main.rs
+│   │       ├── app.rs              # Event loop + layout
+│   │       ├── config.rs           # Config load/save
+│   │       ├── platform_win.rs     # PDH disk active %
+│   │       ├── proxy_lifecycle.rs  # Spawn/manage proxy
+│   │       ├── collectors/         # Data gathering
+│   │       │   ├── system.rs       # CPU, memory, disk, network, processes
+│   │       │   ├── claude.rs       # OAuth + usage API
+│   │       │   ├── claude_local.rs # Local JSONL scanner
+│   │       │   ├── rate_limit.rs   # Proxy rate limit data
+│   │       │   ├── gpu.rs          # NVIDIA NVML + LHM fallback
+│   │       │   └── lhm.rs          # LibreHardwareMonitor HTTP client
+│   │       ├── panels/             # Rich TUI panels
+│   │       │   ├── claude_status.rs
+│   │       │   ├── cpu.rs
+│   │       │   ├── memory.rs
+│   │       │   ├── gpu.rs
+│   │       │   ├── disks.rs
+│   │       │   ├── network.rs
+│   │       │   ├── temps.rs
+│   │       │   └── processes.rs
+│   │       └── ui/                 # Charts + color utilities
+│   │           ├── charts.rs
+│   │           └── colors.rs
+│   └── luna-proxy/         # Embedded reverse proxy binary
+│       └── src/
+│           ├── main.rs
+│           ├── proxy.rs
+│           ├── jsonl.rs
+│           └── health.rs
+```
+
+## Requirements
+
+- Windows 10/11
+- Terminal with Unicode support (Windows Terminal, VS Code terminal)
+- Optional: LibreHardwareMonitor for temps + real CPU frequency
+- Optional: NVIDIA GPU for GPU panel
 
 ## License
 

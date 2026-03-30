@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/luna-common",
+    "crates/luna-proxy",
+    "crates/luna-monitor",
+]

@@ -1,7 +1,4 @@
 __pycache__/
 *.pyc
 .claude/
-luna-monitor/src/luna_monitor.egg-info/
-luna-monitor/build/
-luna-monitor/dist/
-luna-monitor/*.spec
+luna-monitor/target/
