@@ -8,11 +8,19 @@ use crate::collectors::system::{DiskInfo, DiskIO};
 use crate::ui::{charts, colors};
 
 pub fn render(frame: &mut Frame, area: Rect, usage: &[DiskInfo], io: &[DiskIO]) {
+    // Border color: max active % across all drives
+    let max_active = io.iter().map(|d| d.active_pct).fold(0.0f64, f64::max);
+    let border_color = if max_active > 0.0 {
+        colors::io_color(max_active)
+    } else {
+        colors::SYSTEM_BORDER
+    };
+
     let block = Block::default()
         .title(" Disks ")
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(colors::SYSTEM_BORDER));
+        .border_style(Style::default().fg(border_color));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -21,10 +29,14 @@ pub fn render(frame: &mut Frame, area: Rect, usage: &[DiskInfo], io: &[DiskIO]) 
         return;
     }
 
+    // Sort drives alphabetically by mount point
+    let mut sorted_usage: Vec<&DiskInfo> = usage.iter().collect();
+    sorted_usage.sort_by(|a, b| a.mount.cmp(&b.mount));
+
     let mut lines = Vec::new();
     let bar_width = inner.width.saturating_sub(2);
 
-    for disk in usage {
+    for disk in sorted_usage {
         let label = if disk.mount.len() <= 3 {
             disk.mount.clone()
         } else {
@@ -34,32 +46,31 @@ pub fn render(frame: &mut Frame, area: Rect, usage: &[DiskInfo], io: &[DiskIO]) 
         // Find matching IO data
         let io_data = io.iter().find(|d| d.name == disk.mount || d.name == disk.name);
 
-        if let Some(io) = io_data {
-            if io.active_pct > 0.0 || io.read_bps > 0.0 || io.write_bps > 0.0 {
-                // I/O mode: show active %, read/write speeds
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("{} {:.0}% active  R:{}/s  W:{}/s",
-                            label,
-                            io.active_pct,
-                            charts::fmt_bytes(io.read_bps as u64),
-                            charts::fmt_bytes(io.write_bps as u64)),
-                        Style::default().fg(colors::io_color(io.read_bps + io.write_bps)),
-                    ),
-                ]));
-                lines.push(charts::hbar(io.active_pct, bar_width));
-                continue;
-            }
-        }
+        let active_str = io_data
+            .map(|d| format!(" {:.0}% active", d.active_pct))
+            .unwrap_or_default();
 
-        // Fallback: capacity mode
+        // Show: D:\ 42% active  328/446 GB (74%)
+        let bar_pct = io_data
+            .filter(|d| d.active_pct > 0.0)
+            .map(|d| d.active_pct)
+            .unwrap_or(disk.pct);
+
+        let color = if io_data.is_some_and(|d| d.active_pct > 0.0) {
+            colors::io_color(bar_pct)
+        } else {
+            colors::pct_color(disk.pct)
+        };
+
         lines.push(Line::from(vec![
             Span::styled(
-                format!("{} {:.1}/{:.1} GB ({:.0}%)", label, disk.used_gb, disk.total_gb, disk.pct),
-                Style::default().fg(colors::pct_color(disk.pct)),
+                format!("{}{} {:.0}/{:.0} GB ({:.0}%)",
+                    label, active_str,
+                    disk.used_gb, disk.total_gb, disk.pct),
+                Style::default().fg(color),
             ),
         ]));
-        lines.push(charts::hbar(disk.pct, bar_width));
+        lines.push(charts::hbar(bar_pct, bar_width));
     }
 
     let paragraph = Paragraph::new(lines);

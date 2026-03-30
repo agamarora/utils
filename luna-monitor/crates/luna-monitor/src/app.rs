@@ -138,7 +138,7 @@ pub fn run(config: &Config, usage_rx: Option<tokio::sync::mpsc::UnboundedReceive
         // Render
         terminal.draw(|frame| {
             let size = frame.area();
-            let min_height = if config.claude_enabled { 32 } else { 27 };
+            let min_height = if config.claude_enabled { 30 } else { 25 };
             if size.width < 60 || size.height < min_height {
                 let msg = Paragraph::new(Line::from(Span::styled(
                     format!("Resize terminal (min 60x{}, current {}x{})", min_height, size.width, size.height),
@@ -188,18 +188,17 @@ fn compute_pace(history: &[f64]) -> &'static str {
 fn render(frame: &mut ratatui::Frame, area: Rect, state: &AppState, config: &Config) {
     let mut constraints = Vec::new();
     let claude_enabled = config.claude_enabled;
-    let has_gpu = state.gpu_data.is_some();
 
     if claude_enabled {
         constraints.push(Constraint::Length(8));  // Claude Status
-        constraints.push(Constraint::Length(5));  // CPU + Temps (side by side)
-        constraints.push(Constraint::Length(if has_gpu { 5 } else { 5 }));  // Memory (+GPU)
+        constraints.push(Constraint::Length(4));  // CPU + Temps (side by side, 2 border + 2 content)
+        constraints.push(Constraint::Length(5));  // Memory + GPU (GPU needs 3 content lines)
         constraints.push(Constraint::Length(3));  // Network (compact)
         constraints.push(Constraint::Length(6));  // Disks
         constraints.push(Constraint::Min(5));     // Processes
     } else {
-        constraints.push(Constraint::Length(5));  // CPU + Temps (side by side)
-        constraints.push(Constraint::Length(if has_gpu { 5 } else { 5 }));  // Memory (+GPU)
+        constraints.push(Constraint::Length(4));  // CPU + Temps
+        constraints.push(Constraint::Length(5));  // Memory + GPU
         constraints.push(Constraint::Length(3));  // Network (compact)
         constraints.push(Constraint::Length(6));  // Disks
         constraints.push(Constraint::Min(8));     // Processes
