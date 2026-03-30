@@ -25,10 +25,7 @@ Everything from monitor/ plus live Claude Code usage tracking via an embedded re
 
 **Stack:** Rust, ratatui, sysinfo, reqwest, nvml-wrapper, Windows PDH API
 
-```bash
-cd luna-monitor && cargo build --release
-./target/release/luna-monitor.exe
-```
+**Install:** Download `luna-monitor.exe` from [Releases](https://github.com/agamarora/utils/releases) and run it.
 
 ---
 
@@ -51,6 +48,8 @@ A real-time system dashboard that runs entirely in your terminal. Think Task Man
 ```bash
 cd monitor && pip install -r requirements.txt && python monitor.py
 ```
+
+> luna-monitor is the recommended tool — monitor/ is the original Python prototype.
 
 ## License
 
