@@ -34,6 +34,9 @@ pub struct AppState {
     pub disk_active: std::collections::HashMap<String, f64>,
     // Pace tracking: last 3 utilization readings
     pub pace_history: Vec<f64>,
+    // GPU temp tracking (session max/avg since LHM only gives current)
+    pub gpu_temp_max: f32,
+    pub gpu_temp_samples: Vec<f32>,
 }
 
 pub fn run(config: &Config, usage_rx: Option<tokio::sync::mpsc::UnboundedReceiver<UsageData>>) -> io::Result<()> {
@@ -67,6 +70,8 @@ pub fn run(config: &Config, usage_rx: Option<tokio::sync::mpsc::UnboundedReceive
         lhm_data: None,
         disk_active: std::collections::HashMap::new(),
         pace_history: Vec::new(),
+        gpu_temp_max: 0.0,
+        gpu_temp_samples: Vec::new(),
     };
 
     // Prime CPU counters
@@ -103,6 +108,15 @@ pub fn run(config: &Config, usage_rx: Option<tokio::sync::mpsc::UnboundedReceive
                 if lhm_gpu_temp > 0.0 {
                     if let Some(ref mut gpu) = state.gpu_data {
                         gpu.temp_celsius = lhm_gpu_temp as u32;
+                    }
+                    // Track GPU temp max/avg over session
+                    if lhm_gpu_temp > state.gpu_temp_max {
+                        state.gpu_temp_max = lhm_gpu_temp;
+                    }
+                    state.gpu_temp_samples.push(lhm_gpu_temp);
+                    // Keep last 300 samples (~10 min at 2s tick)
+                    if state.gpu_temp_samples.len() > 300 {
+                        state.gpu_temp_samples.remove(0);
                     }
                 }
             }
@@ -249,7 +263,15 @@ fn render(frame: &mut ratatui::Frame, area: Rect, state: &AppState, config: &Con
             .and_then(|d| d.gpu_temp)
             .or_else(|| state.gpu_data.as_ref().map(|g| g.temp_celsius as f32));
 
-        panels::temps::render(frame, halves[1], state.lhm_data.as_ref(), gpu_temp);
+        let gpu_temp_max = if state.gpu_temp_max > 0.0 { Some(state.gpu_temp_max) } else { None };
+        let gpu_temp_avg = if !state.gpu_temp_samples.is_empty() {
+            let sum: f32 = state.gpu_temp_samples.iter().sum();
+            Some(sum / state.gpu_temp_samples.len() as f32)
+        } else {
+            None
+        };
+
+        panels::temps::render(frame, halves[1], state.lhm_data.as_ref(), gpu_temp, gpu_temp_max, gpu_temp_avg);
     }
 
     // Memory + GPU side by side

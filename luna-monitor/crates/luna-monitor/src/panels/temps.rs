@@ -7,7 +7,14 @@ use ratatui::Frame;
 use crate::collectors::lhm::LhmData;
 use crate::ui::colors;
 
-pub fn render(frame: &mut Frame, area: Rect, lhm: Option<&LhmData>, gpu_temp: Option<f32>) {
+pub fn render(
+    frame: &mut Frame,
+    area: Rect,
+    lhm: Option<&LhmData>,
+    gpu_temp: Option<f32>,
+    gpu_temp_max: Option<f32>,
+    gpu_temp_avg: Option<f32>,
+) {
     let border_color = lhm
         .and_then(|d| d.cpu_package_temp)
         .map(|t| colors::temp_color(t as f64))
@@ -28,30 +35,23 @@ pub fn render(frame: &mut Frame, area: Rect, lhm: Option<&LhmData>, gpu_temp: Op
 
     let mut lines = Vec::new();
 
-    // Line 1: CPU temp
+    // Line 1: CPU temp with ▲max ~avg
     if let Some(lhm) = lhm {
         if let Some(pkg) = lhm.cpu_package_temp {
             let color = colors::temp_color(pkg as f64);
+            let mut spans = vec![
+                Span::raw("CPU: "),
+                Span::styled(format!("{:.0}°C", pkg), Style::default().fg(color)),
+            ];
             if inner.width >= 30 {
-                // Full: CPU: 45°C (max 52, avg 38)
-                let max_str = lhm.cpu_max_temp
-                    .map(|t| format!("max {:.0}", t))
-                    .unwrap_or_else(|| "--".to_string());
-                let avg_str = lhm.cpu_avg_temp
-                    .map(|t| format!("avg {:.0}", t))
-                    .unwrap_or_else(|| "--".to_string());
-                lines.push(Line::from(vec![
-                    Span::raw("CPU: "),
-                    Span::styled(format!("{:.0}°C", pkg), Style::default().fg(color)),
-                    Span::raw(format!(" ({}, {})", max_str, avg_str)),
-                ]));
-            } else {
-                // Narrow: CPU: 45°C
-                lines.push(Line::from(vec![
-                    Span::raw("CPU: "),
-                    Span::styled(format!("{:.0}°C", pkg), Style::default().fg(color)),
-                ]));
+                if let Some(max) = lhm.cpu_max_temp {
+                    spans.push(Span::styled(format!("  ▲{:.0}", max), Style::default().fg(Color::DarkGray)));
+                }
+                if let Some(avg) = lhm.cpu_avg_temp {
+                    spans.push(Span::styled(format!("  ~{:.0}", avg), Style::default().fg(Color::DarkGray)));
+                }
             }
+            lines.push(Line::from(spans));
         } else {
             lines.push(Line::from(Span::raw("CPU: --")));
         }
@@ -62,14 +62,23 @@ pub fn render(frame: &mut Frame, area: Rect, lhm: Option<&LhmData>, gpu_temp: Op
         )));
     }
 
-    // Line 2: GPU temp
+    // Line 2: GPU temp with ▲max ~avg
     if let Some(temp) = gpu_temp {
         if temp > 0.0 {
             let color = colors::temp_color(temp as f64);
-            lines.push(Line::from(vec![
+            let mut spans = vec![
                 Span::raw("GPU: "),
                 Span::styled(format!("{:.0}°C", temp), Style::default().fg(color)),
-            ]));
+            ];
+            if inner.width >= 30 {
+                if let Some(max) = gpu_temp_max {
+                    spans.push(Span::styled(format!("  ▲{:.0}", max), Style::default().fg(Color::DarkGray)));
+                }
+                if let Some(avg) = gpu_temp_avg {
+                    spans.push(Span::styled(format!("  ~{:.0}", avg), Style::default().fg(Color::DarkGray)));
+                }
+            }
+            lines.push(Line::from(spans));
         } else {
             lines.push(Line::from(Span::raw("GPU: --")));
         }
