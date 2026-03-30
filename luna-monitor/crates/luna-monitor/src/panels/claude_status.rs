@@ -4,16 +4,25 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, BorderType, Paragraph};
 use ratatui::Frame;
 
-use luna_common::types::{ProxyHealth, UsageData};
+use luna_common::types::UsageData;
 use crate::ui::{charts, colors};
+
+pub struct NetSpeeds {
+    pub rx_now: f64,
+    pub tx_now: f64,
+    pub rx_avg: f64,
+    pub tx_avg: f64,
+}
 
 pub fn render(
     frame: &mut Frame,
     area: Rect,
     usage: &UsageData,
-    proxy_health: Option<&ProxyHealth>,
     proxy_running: bool,
+    claude_reachable: bool,
     pace: &str,
+    eta: &str,
+    net: &NetSpeeds,
 ) {
     let title = if usage.plan_name.is_empty() {
         " Claude Usage ".to_string()
@@ -54,36 +63,59 @@ pub fn render(
         )));
     }
 
-    // 5h utilization with pace indicator
-    let five_h_pct = usage.five_hour.utilization * 100.0;
+    // 5h utilization (API may return 0-1 or 0-100)
+    let five_h_pct = as_pct(usage.five_hour.utilization);
     let five_h_reset = format_reset(&usage.five_hour.resets_at);
-    let pace_str = if !pace.is_empty() { format!(" {}", pace) } else { String::new() };
-    lines.push(Line::from(format!("5h: {:.1}%{} {}", five_h_pct, pace_str, five_h_reset)));
+    lines.push(Line::from(format!("5h: {:.1}% {}", five_h_pct, five_h_reset)));
     lines.push(charts::hbar(five_h_pct, bar_width));
 
     // 7d utilization
-    let seven_d_pct = usage.seven_day.utilization * 100.0;
+    let seven_d_pct = as_pct(usage.seven_day.utilization);
     let seven_d_reset = format_reset(&usage.seven_day.resets_at);
     lines.push(Line::from(format!("7d: {:.1}% {}", seven_d_pct, seven_d_reset)));
     lines.push(charts::hbar(seven_d_pct, bar_width));
 
-    // Source + proxy health on one line
-    let mut source_parts = Vec::new();
-    if proxy_running {
-        source_parts.push(Span::styled("via proxy", Style::default().fg(Color::Green)));
-        if let Some(health) = proxy_health {
-            source_parts.push(Span::styled(
-                format!("  {}ms  {} reqs  {} 429s",
-                    health.last_latency_ms as u64,
-                    health.requests_proxied,
-                    health.api_errors_429),
-                Style::default().fg(Color::DarkGray),
-            ));
-        }
-    } else {
-        source_parts.push(Span::styled("via API", Style::default().fg(Color::DarkGray)));
+    // Network line
+    lines.push(Line::from(vec![
+        Span::styled("Net ", Style::default().fg(Color::DarkGray)),
+        Span::styled("↓", Style::default().fg(Color::Green)),
+        Span::raw(format!("{} ", charts::fmt_speed(net.rx_now))),
+        Span::styled("↑", Style::default().fg(Color::Red)),
+        Span::raw(format!("{}", charts::fmt_speed(net.tx_now))),
+        Span::styled(
+            format!("  avg ↓{} ↑{}", charts::fmt_speed(net.rx_avg), charts::fmt_speed(net.tx_avg)),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]));
+
+    // Status dots + pace + ETA
+    let mut parts = Vec::new();
+
+    // P● proxy status
+    let (p_dot, p_color) = if proxy_running { ("P●", Color::Green) } else { ("P●", Color::Red) };
+    parts.push(Span::styled(p_dot, Style::default().fg(p_color)));
+    parts.push(Span::raw(" "));
+
+    // C● claude reachable
+    let (c_dot, c_color) = if claude_reachable { ("C●", Color::Green) } else { ("C●", Color::Red) };
+    parts.push(Span::styled(c_dot, Style::default().fg(c_color)));
+
+    if !pace.is_empty() {
+        parts.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+        let pace_color = if pace.starts_with('↑') {
+            Color::Yellow
+        } else if pace.starts_with('↓') {
+            Color::Cyan
+        } else {
+            Color::DarkGray
+        };
+        parts.push(Span::styled(pace, Style::default().fg(pace_color)));
     }
-    lines.push(Line::from(source_parts));
+    if !eta.is_empty() {
+        parts.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+        parts.push(Span::styled(eta, Style::default().fg(Color::DarkGray)));
+    }
+    lines.push(Line::from(parts));
 
     let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, inner);
@@ -130,6 +162,12 @@ fn format_reset(resets_at: &str) -> String {
     }
 
     String::new()
+}
+
+/// Normalize utilization to 0-100 percentage.
+/// API may return 0-1 (fraction) or 0-100 (already percentage).
+fn as_pct(v: f64) -> f64 {
+    if v > 1.0 { v } else { v * 100.0 }
 }
 
 fn format_duration(seconds: f64) -> String {

@@ -32,8 +32,8 @@ pub struct AppState {
     pub proxy_health: Option<ProxyHealth>,
     pub lhm_data: Option<LhmData>,
     pub disk_active: std::collections::HashMap<String, f64>,
-    // Pace tracking: last 3 utilization readings
-    pub pace_history: Vec<f64>,
+    // Pace tracking: last 3 (epoch_secs, pct) readings
+    pub pace_history: Vec<(f64, f64)>,
     // GPU temp tracking (session max/avg since LHM only gives current)
     pub gpu_temp_max: f32,
     pub gpu_temp_samples: Vec<f32>,
@@ -85,9 +85,12 @@ pub fn run(config: &Config, usage_rx: Option<tokio::sync::mpsc::UnboundedReceive
         // Check for new usage data from background
         if let Some(ref mut rx) = usage_rx {
             while let Ok(data) = rx.try_recv() {
-                // Track pace
-                let pct = data.five_hour.utilization * 100.0;
-                state.pace_history.push(pct);
+                // Track pace with timestamp (normalize to 0-100)
+                let u = data.five_hour.utilization;
+                let pct = if u > 1.0 { u } else { u * 100.0 };
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+                state.pace_history.push((now, pct));
                 if state.pace_history.len() > 3 {
                     state.pace_history.remove(0);
                 }
@@ -125,9 +128,11 @@ pub fn run(config: &Config, usage_rx: Option<tokio::sync::mpsc::UnboundedReceive
         if let Some(entry) = state.rate_limit_collector.collect() {
             if state.rate_limit_collector.is_fresh() && state.usage.source != "api" {
                 if let Some(util) = entry.five_h_utilization {
-                    // Track pace from proxy data too
-                    let pct = util * 100.0;
-                    state.pace_history.push(pct);
+                    // Track pace from proxy data too (normalize to 0-100)
+                    let pct = if util > 1.0 { util } else { util * 100.0 };
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+                    state.pace_history.push((now, pct));
                     if state.pace_history.len() > 3 {
                         state.pace_history.remove(0);
                     }
@@ -182,14 +187,14 @@ pub fn run(config: &Config, usage_rx: Option<tokio::sync::mpsc::UnboundedReceive
     Ok(())
 }
 
-/// Compute pace string from last 3 utilization readings.
-fn compute_pace(history: &[f64]) -> &'static str {
+/// Compute pace string from last 3 (epoch, pct) readings.
+fn compute_pace(history: &[(f64, f64)]) -> &'static str {
     if history.len() < 2 {
         return "";
     }
-    let last = *history.last().unwrap();
-    let prev = history[history.len() - 2];
-    let delta = last - prev;
+    let (_, pct_last) = history[history.len() - 1];
+    let (_, pct_prev) = history[history.len() - 2];
+    let delta = pct_last - pct_prev;
     if delta > 2.0 {
         "↑ rising"
     } else if delta < -2.0 {
@@ -199,15 +204,78 @@ fn compute_pace(history: &[f64]) -> &'static str {
     }
 }
 
+/// Compute ETA to cap from current utilization and window reset time.
+/// Uses: rate = current_pct / elapsed_in_window, then extrapolates to 100%.
+fn compute_eta(current_pct: f64, resets_at: &str) -> String {
+    if current_pct < 0.1 {
+        return String::new(); // nothing to extrapolate
+    }
+
+    // Parse resets_at to get seconds until reset
+    let secs_until_reset = parse_reset_secs(resets_at);
+    if secs_until_reset <= 0.0 {
+        return String::new();
+    }
+
+    let window_total: f64 = 5.0 * 3600.0; // 5h window in seconds
+    let elapsed = window_total - secs_until_reset;
+    if elapsed < 60.0 {
+        return String::new(); // window just started, too noisy
+    }
+
+    // rate in %/sec based on average consumption so far
+    let rate = current_pct / elapsed;
+    let remaining_pct = 100.0 - current_pct;
+    let eta_secs = remaining_pct / rate;
+
+    if eta_secs <= 0.0 {
+        return "at cap".to_string();
+    }
+
+    let total_min = (eta_secs / 60.0) as u64;
+    if total_min >= 60 {
+        format!("ETA ~{}h {}m to cap", total_min / 60, total_min % 60)
+    } else if total_min > 0 {
+        format!("ETA ~{}m to cap", total_min)
+    } else {
+        "ETA <1m to cap".to_string()
+    }
+}
+
+/// Parse resets_at string into seconds remaining. Returns 0 on failure.
+fn parse_reset_secs(resets_at: &str) -> f64 {
+    if resets_at.is_empty() {
+        return 0.0;
+    }
+    // Try epoch
+    if let Ok(epoch) = resets_at.parse::<f64>() {
+        if epoch > 1_000_000_000.0 {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+            return (epoch - now).max(0.0);
+        }
+    }
+    // Try ISO 8601
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(resets_at) {
+        let remaining = dt.signed_duration_since(chrono::Utc::now());
+        return remaining.num_seconds().max(0) as f64;
+    }
+    // Try UTC without timezone
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(resets_at, "%Y-%m-%dT%H:%M:%SZ") {
+        let remaining = dt.signed_duration_since(chrono::Utc::now().naive_utc());
+        return remaining.num_seconds().max(0) as f64;
+    }
+    0.0
+}
+
 fn render(frame: &mut ratatui::Frame, area: Rect, state: &AppState, config: &Config) {
     let mut constraints = Vec::new();
     let claude_enabled = config.claude_enabled;
 
     if claude_enabled {
-        constraints.push(Constraint::Length(8));  // Claude Status
+        constraints.push(Constraint::Length(8));  // Claude Status (includes net line)
         constraints.push(Constraint::Length(4));  // CPU + Temps (side by side, 2 border + 2 content)
         constraints.push(Constraint::Length(5));  // Memory + GPU (GPU needs 3 content lines)
-        constraints.push(Constraint::Length(3));  // Network (compact)
         constraints.push(Constraint::Length(6));  // Disks
         constraints.push(Constraint::Min(5));     // Processes
     } else {
@@ -221,16 +289,24 @@ fn render(frame: &mut ratatui::Frame, area: Rect, state: &AppState, config: &Con
     let chunks = Layout::vertical(constraints).split(area);
     let mut idx = 0;
 
-    // Claude Status
+    // Claude Status (includes network)
     if claude_enabled {
         let proxy_running = state.proxy_health.is_some();
+        let claude_reachable = state.usage.error.is_none() && state.usage.fetched_at.is_some();
+        let util = state.usage.five_hour.utilization;
+        let current_pct = if util > 1.0 { util } else { util * 100.0 };
         let pace = compute_pace(&state.pace_history);
+        let eta = compute_eta(current_pct, &state.usage.five_hour.resets_at);
+        let (rx_now, tx_now, rx_avg, tx_avg, _, _) = state.system.net_speeds();
+        let net = panels::claude_status::NetSpeeds { rx_now, tx_now, rx_avg, tx_avg };
         panels::claude_status::render(
             frame, chunks[idx],
             &state.usage,
-            state.proxy_health.as_ref(),
             proxy_running,
+            claude_reachable,
             pace,
+            &eta,
+            &net,
         );
         idx += 1;
     }
@@ -293,10 +369,12 @@ fn render(frame: &mut ratatui::Frame, area: Rect, state: &AppState, config: &Con
         panels::memory::render(frame, mem_gpu_area, mem_used, mem_total, swap_used, swap_total);
     }
 
-    // Network (compact)
-    let (rx_now, tx_now, rx_avg, tx_avg, rx_peak, tx_peak) = state.system.net_speeds();
-    panels::network::render(frame, chunks[idx], rx_now, tx_now, rx_avg, tx_avg, rx_peak, tx_peak);
-    idx += 1;
+    // Network (standalone only when Claude panel is disabled — otherwise embedded in Claude panel)
+    if !claude_enabled {
+        let (rx_now, tx_now, rx_avg, tx_avg, rx_peak, tx_peak) = state.system.net_speeds();
+        panels::network::render(frame, chunks[idx], rx_now, tx_now, rx_avg, tx_avg, rx_peak, tx_peak);
+        idx += 1;
+    }
 
     // Disks
     let disk_io = state.system.disk_io(&state.disk_active);

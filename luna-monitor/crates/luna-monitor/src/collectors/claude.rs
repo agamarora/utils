@@ -185,14 +185,6 @@ impl ClaudeCollector {
                 .and_then(|v| v.as_f64()).unwrap_or(0.0);
         }
 
-        // Detect expired windows
-        if is_window_expired(&data.five_hour.resets_at) {
-            data.five_hour.utilization = 0.0;
-        }
-        if is_window_expired(&data.seven_day.resets_at) {
-            data.seven_day.utilization = 0.0;
-        }
-
         Ok(data)
     }
 

@@ -83,10 +83,12 @@ fn main() {
         return;
     }
 
-    // --doctor
+    // --doctor (launches dashboard after enable/disable)
     if args.doctor {
-        run_doctor();
-        return;
+        if !run_doctor() {
+            return; // option 3 (reset) — exit
+        }
+        // fall through to dashboard
     }
 
     // --enable-proxy / --disable-proxy
@@ -409,7 +411,8 @@ fn first_run_prompt(config: &mut Config) {
     println!();
 }
 
-fn run_doctor() {
+/// Returns true if dashboard should launch after, false to exit.
+fn run_doctor() -> bool {
     let port = paths::DEFAULT_PORT;
     let proxy_running = collectors::rate_limit::RateLimitCollector::proxy_health(port).is_some();
 
@@ -421,9 +424,9 @@ fn run_doctor() {
         println!("Current status: proxy not running");
     }
     println!();
-    println!("1) Enable proxy (route Claude Code through luna-monitor for live usage %)");
-    println!("2) Disable proxy (direct Claude Code, system metrics only)");
-    println!("3) Reset everything (remove all luna-monitor config, restore vanilla Claude Code)");
+    println!("1) Enable proxy and start dashboard");
+    println!("2) Disable proxy and start dashboard (system metrics only)");
+    println!("3) Reset everything (remove all config, exit)");
     println!();
     print!("Choose [1-3]: ");
     use std::io::Write;
@@ -439,17 +442,22 @@ fn run_doctor() {
             config.save();
             let mut pm = ProxyManager::new(port);
             if pm.start_proxy() {
-                println!("Proxy enabled on port {}", port);
+                println!("Proxy enabled. Launching dashboard...");
+                println!();
             } else {
-                println!("Failed to start proxy");
+                println!("Failed to start proxy. Launching dashboard without proxy...");
+                println!();
             }
+            true // launch dashboard
         }
         "2" => {
             let mut config = Config::load();
             config.proxy_enabled = Some(false);
             config.save();
             proxy_lifecycle::remove_proxy_setting();
-            println!("Proxy disabled");
+            println!("Proxy disabled. Launching dashboard...");
+            println!();
+            true // launch dashboard
         }
         "3" => {
             proxy_lifecycle::remove_proxy_setting();
@@ -457,9 +465,11 @@ fn run_doctor() {
                 let _ = std::fs::remove_dir_all(&dir);
             }
             println!("Reset complete. All luna-monitor config removed.");
+            false // exit
         }
         _ => {
             println!("Invalid choice");
+            false
         }
     }
 }
