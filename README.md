@@ -1,55 +1,47 @@
 # Utils
 
-A collection of lightweight, open-source utilities built for daily use on Windows. Each tool lives in its own folder with its own README.
+Open-source tools for developers who live in the terminal. Built for Windows, MIT licensed.
 
-MIT licensed. Contributions welcome.
+## luna-monitor — The fuel gauge for Claude Code
 
-## Tools
+You're deep in a Claude session. Usage feels high. Are you about to get rate-limited? There's no way to know without leaving your flow.
 
-### [luna-monitor/](luna-monitor/) — Claude Code Developer Dashboard
-
-Everything from monitor/ plus live Claude Code usage tracking via an embedded reverse proxy. Built in Rust for fast startup and low resource usage.
+luna-monitor gives you that answer at a glance. One terminal window shows your 5-hour and 7-day usage limits, how fast you're burning through them, and an ETA to cap. It also shows your CPU, GPU, memory, disk, and temps, because when Claude kicks off a build that pegs your machine, you want to see that too.
 
 <p align="center">
   <img src="luna-monitor/screenshot.png" alt="luna-monitor dashboard" width="720">
 </p>
 
-**What it shows:**
-- Live 5-hour and 7-day usage bars with reset countdown timers, pace indicator, and ETA to cap
-- Proxy and API health status dots (P●/C●), network speeds — all inside one panel
-- CPU sparkline with real frequency (via LibreHardwareMonitor auto-detection)
-- GPU, memory, disk I/O with active %, temperatures, top processes
-- `--doctor` interactive setup wizard (launches dashboard after configuration)
+**How it works:** A tiny embedded proxy sits between Claude Code and the Anthropic API. Every response carries rate-limit headers, and the proxy captures them silently. Your requests and responses pass through untouched. The numbers you see are real, live, and straight from Anthropic. The status line tells you when data was last updated: "just now" during active use, "3m ago" when idle.
 
-**How usage tracking works:** An embedded reverse proxy captures rate limit headers from Claude Code API responses. No extra API calls needed. If the proxy crashes, Claude Code falls back to the direct API — your workflow is never blocked.
+If the proxy crashes, Claude Code falls back to the direct API. Your workflow is never blocked.
 
-**Stack:** Rust, ratatui, sysinfo, reqwest, nvml-wrapper, Windows PDH API
+**Get started:**
 
-**Install:** Download `luna-monitor.exe` from [Releases](https://github.com/agamarora/utils/releases) and run it.
+```bash
+# Download from releases
+luna-monitor
+
+# Or build from source
+git clone https://github.com/agamarora/utils.git
+cd utils/luna-monitor && cargo build --release
+```
+
+On first launch it sets up the proxy. That's it. Usage data appears within seconds of your next Claude request.
+
+[Full documentation →](luna-monitor/)
 
 ---
 
-### [monitor/](monitor/) — Terminal System Monitor
+## monitor — Terminal System Monitor (Python)
 
-A real-time system dashboard that runs entirely in your terminal. Think Task Manager, but minimal, fast, and keyboard-friendly.
-
-**What it shows:**
-- CPU utilisation as a rolling waveform (not just a number — you see the trend over time)
-- Real-time CPU clock speed via LibreHardwareMonitor (not the static base clock that most tools report)
-- Disk active time % (same metric as Task Manager) with per-drive read/write throughput
-- GPU utilisation, VRAM, and temperature (NVIDIA)
-- RAM and swap usage
-- CPU and GPU temperatures
-- Network speeds (current, average, peak)
-- Top processes split by CPU and RAM usage
-
-**Stack:** Python, psutil, Rich, pynvml, Windows PDH API, LibreHardwareMonitor
+The original Python prototype. A real-time system dashboard with CPU waveforms, disk active %, GPU stats, and temperatures. Still works, but luna-monitor is the recommended tool now.
 
 ```bash
 cd monitor && pip install -r requirements.txt && python monitor.py
 ```
 
-> luna-monitor is the recommended tool — monitor/ is the original Python prototype.
+[Documentation →](monitor/)
 
 ## License
 
