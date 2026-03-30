@@ -1077,12 +1077,17 @@ dependencies = [
 name = "luna-monitor"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "chrono",
  "clap",
  "crossterm",
  "ctrlc",
  "dirs",
  "glob",
+ "http-body-util",
+ "hyper",
+ "hyper-tls",
+ "hyper-util",
  "luna-common",
  "nvml-wrapper",
  "ratatui",
@@ -1090,26 +1095,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sysinfo",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "luna-proxy"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "chrono",
- "clap",
- "ctrlc",
- "dirs",
- "http-body-util",
- "hyper",
- "hyper-tls",
- "hyper-util",
- "luna-common",
- "serde_json",
  "tempfile",
  "tokio",
  "tracing",

@@ -36,3 +36,6 @@ gpu = ["dep:nvml-wrapper"]
 [dependencies.nvml-wrapper]
 version = "0.10"
 optional = true
+
+[dev-dependencies]
+tempfile = "3"

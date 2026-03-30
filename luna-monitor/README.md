@@ -19,7 +19,7 @@ Terminal dashboard for Claude Code developers. Tracks your API usage limits, sys
 Requires [Rust](https://rustup.rs/) (1.70+).
 
 ```bash
-git clone https://github.com/anthropics/utils.git
+git clone https://github.com/agamarora/utils.git
 cd utils/luna-monitor
 cargo build --release
 ```
@@ -28,7 +28,7 @@ The binary is at `target/release/luna-monitor.exe`.
 
 ### Pre-built binary
 
-Download from [Releases](../../releases) and put it somewhere on your PATH.
+Download `luna-monitor.exe` from [Releases](https://github.com/agamarora/utils/releases) and put it somewhere on your PATH.
 
 ## First run
 
