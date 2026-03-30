@@ -267,10 +267,16 @@ impl ClaudeCollector {
     }
 
     fn cached_or_disk(&self) -> UsageData {
-        if let Some(ref cached) = self.cached_usage {
-            return cached.clone();
+        let mut data = if let Some(ref cached) = self.cached_usage {
+            cached.clone()
+        } else {
+            self.load_disk_cache().unwrap_or_default()
+        };
+        // Mark as stale so proxy data can take over when API fails
+        if data.source == "api" {
+            data.source = "stale".to_string();
         }
-        self.load_disk_cache().unwrap_or_default()
+        data
     }
 
     fn load_disk_cache(&self) -> Option<UsageData> {
