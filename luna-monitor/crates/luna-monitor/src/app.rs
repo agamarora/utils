@@ -152,7 +152,7 @@ pub fn run(config: &Config, usage_rx: Option<tokio::sync::mpsc::UnboundedReceive
         // Render
         terminal.draw(|frame| {
             let size = frame.area();
-            let min_height = if config.claude_enabled { 27 } else { 22 };
+            let min_height = if config.claude_enabled { 30 } else { 25 };
             if size.width < 60 || size.height < min_height {
                 let msg = Paragraph::new(Line::from(Span::styled(
                     format!("Resize terminal (min 60x{}, current {}x{})", min_height, size.width, size.height),
@@ -205,14 +205,16 @@ fn render(frame: &mut ratatui::Frame, area: Rect, state: &AppState, config: &Con
 
     if claude_enabled {
         constraints.push(Constraint::Length(8));  // Claude Status
-        constraints.push(Constraint::Length(4));  // Temps(30) + CPU(70)
-        constraints.push(Constraint::Length(5));  // Memory(50) + GPU(50)
-        constraints.push(Constraint::Length(6));  // Disks(70) + Network(30)
+        constraints.push(Constraint::Length(4));  // CPU + Temps (side by side, 2 border + 2 content)
+        constraints.push(Constraint::Length(5));  // Memory + GPU (GPU needs 3 content lines)
+        constraints.push(Constraint::Length(3));  // Network (compact)
+        constraints.push(Constraint::Length(6));  // Disks
         constraints.push(Constraint::Min(5));     // Processes
     } else {
-        constraints.push(Constraint::Length(4));  // Temps(30) + CPU(70)
-        constraints.push(Constraint::Length(5));  // Memory(50) + GPU(50)
-        constraints.push(Constraint::Length(6));  // Disks(70) + Network(30)
+        constraints.push(Constraint::Length(4));  // CPU + Temps
+        constraints.push(Constraint::Length(5));  // Memory + GPU
+        constraints.push(Constraint::Length(3));  // Network (compact)
+        constraints.push(Constraint::Length(6));  // Disks
         constraints.push(Constraint::Min(8));     // Processes
     }
 
@@ -233,14 +235,28 @@ fn render(frame: &mut ratatui::Frame, area: Rect, state: &AppState, config: &Con
         idx += 1;
     }
 
-    // Temps(30%) + CPU(70%) — asymmetric split
-    let temps_cpu_area = chunks[idx];
+    // CPU + Temps side by side
+    let cpu_temps_area = chunks[idx];
     idx += 1;
     {
-        let split = Layout::horizontal([
-            Constraint::Percentage(30),
-            Constraint::Percentage(70),
-        ]).split(temps_cpu_area);
+        let halves = Layout::horizontal([
+            Constraint::Percentage(50),
+            Constraint::Percentage(50),
+        ]).split(cpu_temps_area);
+
+        let freq_str = state.lhm_data.as_ref()
+            .and_then(|d| d.avg_cpu_freq_ghz_str())
+            .unwrap_or_else(|| {
+                let mhz = state.system.cpu_freq_mhz();
+                if mhz > 0 { format!("{:.2} GHz", mhz as f64 / 1000.0) } else { "? GHz".to_string() }
+            });
+
+        panels::cpu::render(
+            frame, halves[0],
+            state.system.cpu_percent(),
+            &freq_str,
+            state.system.cpu_avg_5min(),
+        );
 
         // GPU temp for temps panel: prefer LHM, fallback to nvml
         let gpu_temp = state.lhm_data.as_ref()
@@ -255,21 +271,7 @@ fn render(frame: &mut ratatui::Frame, area: Rect, state: &AppState, config: &Con
             None
         };
 
-        panels::temps::render(frame, split[0], state.lhm_data.as_ref(), gpu_temp, gpu_temp_max, gpu_temp_avg);
-
-        let freq_str = state.lhm_data.as_ref()
-            .and_then(|d| d.avg_cpu_freq_ghz_str())
-            .unwrap_or_else(|| {
-                let mhz = state.system.cpu_freq_mhz();
-                if mhz > 0 { format!("{:.2} GHz", mhz as f64 / 1000.0) } else { "? GHz".to_string() }
-            });
-
-        panels::cpu::render(
-            frame, split[1],
-            state.system.cpu_percent(),
-            &freq_str,
-            state.system.cpu_avg_5min(),
-        );
+        panels::temps::render(frame, halves[1], state.lhm_data.as_ref(), gpu_temp, gpu_temp_max, gpu_temp_avg);
     }
 
     // Memory + GPU side by side
@@ -291,21 +293,15 @@ fn render(frame: &mut ratatui::Frame, area: Rect, state: &AppState, config: &Con
         panels::memory::render(frame, mem_gpu_area, mem_used, mem_total, swap_used, swap_total);
     }
 
-    // Disks(70%) + Network(30%) — asymmetric split
-    let disks_net_area = chunks[idx];
+    // Network (compact)
+    let (rx_now, tx_now, rx_avg, tx_avg, rx_peak, tx_peak) = state.system.net_speeds();
+    panels::network::render(frame, chunks[idx], rx_now, tx_now, rx_avg, tx_avg, rx_peak, tx_peak);
     idx += 1;
-    {
-        let split = Layout::horizontal([
-            Constraint::Percentage(70),
-            Constraint::Percentage(30),
-        ]).split(disks_net_area);
 
-        let disk_io = state.system.disk_io(&state.disk_active);
-        panels::disks::render(frame, split[0], &state.system.disk_usage(), &disk_io);
-
-        let (rx_now, tx_now, rx_avg, tx_avg, rx_peak, tx_peak) = state.system.net_speeds();
-        panels::network::render(frame, split[1], rx_now, tx_now, rx_avg, tx_avg, rx_peak, tx_peak);
-    }
+    // Disks
+    let disk_io = state.system.disk_io(&state.disk_active);
+    panels::disks::render(frame, chunks[idx], &state.system.disk_usage(), &disk_io);
+    idx += 1;
 
     // Processes
     let (top_cpu, top_mem) = state.system.top_processes(6);

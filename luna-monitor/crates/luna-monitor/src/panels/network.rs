@@ -26,38 +26,16 @@ pub fn render(
         return;
     }
 
-    // With enough height, stack vertically for readability
-    if inner.height >= 3 {
-        let lines = vec![
-            Line::from(vec![
-                Span::styled("↓ ", Style::default().fg(Color::Green)),
-                Span::raw(charts::fmt_speed(rx_now)),
-            ]),
-            Line::from(vec![
-                Span::styled("↑ ", Style::default().fg(Color::Red)),
-                Span::raw(charts::fmt_speed(tx_now)),
-            ]),
-            Line::from(vec![
-                Span::styled(
-                    format!("avg ↓{} ↑{}",
-                        charts::fmt_speed(rx_avg),
-                        charts::fmt_speed(tx_avg)),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]),
-        ];
-        let paragraph = Paragraph::new(lines);
-        frame.render_widget(paragraph, inner);
-    } else {
-        // Compact single line fallback
-        let line = Line::from(vec![
-            Span::styled("↓ ", Style::default().fg(Color::Green)),
-            Span::raw(charts::fmt_speed(rx_now)),
-            Span::raw("  "),
-            Span::styled("↑ ", Style::default().fg(Color::Red)),
-            Span::raw(charts::fmt_speed(tx_now)),
-        ]);
-        let paragraph = Paragraph::new(vec![line]);
-        frame.render_widget(paragraph, inner);
-    }
+    // Single compact line: ↓ 1.2 Mb/s  ↑ 5 Kb/s  (avg ↓1.0 ↑3 Mb/s)
+    let line = Line::from(vec![
+        Span::styled("↓ ", Style::default().fg(Color::Green)),
+        Span::raw(charts::fmt_speed(rx_now)),
+        Span::raw("  "),
+        Span::styled("↑ ", Style::default().fg(Color::Red)),
+        Span::raw(charts::fmt_speed(tx_now)),
+        Span::raw(format!("  (avg ↓{} ↑{})", charts::fmt_speed(rx_avg), charts::fmt_speed(tx_avg))),
+    ]);
+
+    let paragraph = Paragraph::new(vec![line]);
+    frame.render_widget(paragraph, inner);
 }
