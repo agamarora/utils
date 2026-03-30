@@ -1,0 +1,30 @@
+[package]
+name = "luna-tt"
+version = "0.0.1"
+edition = "2021"
+description = "A living visual credential for AI builders — procedural growth from Claude Code usage"
+
+[dependencies]
+ratatui = { version = "0.29", features = ["all-widgets"] }
+crossterm = "0.28"
+sysinfo = "0.32"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rand = { version = "0.8", features = ["std_rng"] }
+tokio = { version = "1", features = ["full"] }
+hyper = { version = "1", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio", "http1", "http2"] }
+hyper-tls = "0.6"
+http-body-util = "0.1"
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+ctrlc = "3"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
