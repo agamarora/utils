@@ -1,5 +1,5 @@
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, BorderType, Paragraph};
 use ratatui::Frame;
@@ -10,8 +10,8 @@ use crate::ui::{charts, colors};
 pub fn render(frame: &mut Frame, area: Rect, usage: &[DiskInfo], io: &[DiskIO]) {
     // Border color: max active % across all drives
     let max_active = io.iter().map(|d| d.active_pct).fold(0.0f64, f64::max);
-    let border_color = if max_active > 0.0 {
-        colors::io_color(max_active)
+    let border_color = if max_active > 1.0 {
+        colors::pct_color(max_active)
     } else {
         colors::SYSTEM_BORDER
     };
@@ -45,31 +45,29 @@ pub fn render(frame: &mut Frame, area: Rect, usage: &[DiskInfo], io: &[DiskIO]) 
 
         // Find matching IO data
         let io_data = io.iter().find(|d| d.name == disk.mount || d.name == disk.name);
+        let active_pct = io_data.map(|d| d.active_pct).unwrap_or(0.0);
 
-        let active_str = io_data
-            .map(|d| format!(" {:.0}% active", d.active_pct))
-            .unwrap_or_default();
+        // Bar shows active % when available, otherwise capacity %
+        let bar_pct = if active_pct > 0.0 { active_pct } else { disk.pct };
 
-        // Show: D:\ 42% active  328/446 GB (74%)
-        let bar_pct = io_data
-            .filter(|d| d.active_pct > 0.0)
-            .map(|d| d.active_pct)
-            .unwrap_or(disk.pct);
+        // Split into separate spans: active% colored, capacity in neutral color
+        let mut spans = Vec::new();
+        spans.push(Span::raw(format!("{} ", label)));
 
-        let color = if io_data.is_some_and(|d| d.active_pct > 0.0) {
-            colors::io_color(bar_pct)
-        } else {
-            colors::pct_color(disk.pct)
-        };
+        if active_pct > 0.0 {
+            spans.push(Span::styled(
+                format!("{:.0}% active", active_pct),
+                Style::default().fg(colors::pct_color(active_pct)),
+            ));
+            spans.push(Span::raw("  "));
+        }
 
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("{}{} {:.0}/{:.0} GB ({:.0}%)",
-                    label, active_str,
-                    disk.used_gb, disk.total_gb, disk.pct),
-                Style::default().fg(color),
-            ),
-        ]));
+        spans.push(Span::styled(
+            format!("{:.0}/{:.0} GB ({:.0}%)", disk.used_gb, disk.total_gb, disk.pct),
+            Style::default().fg(Color::DarkGray),
+        ));
+
+        lines.push(Line::from(spans));
         lines.push(charts::hbar(bar_pct, bar_width));
     }
 
