@@ -97,6 +97,17 @@ pub fn run(config: &Config, usage_rx: Option<tokio::sync::mpsc::UnboundedReceive
         state.local_usage = state.local_collector.collect();
         state.disk_active = platform_win::collect_disk_active();
 
+        // GPU temp merge: prefer LHM when available and non-zero
+        if let Some(ref lhm) = state.lhm_data {
+            if let Some(lhm_gpu_temp) = lhm.gpu_temp {
+                if lhm_gpu_temp > 0.0 {
+                    if let Some(ref mut gpu) = state.gpu_data {
+                        gpu.temp_celsius = lhm_gpu_temp as u32;
+                    }
+                }
+            }
+        }
+
         if let Some(entry) = state.rate_limit_collector.collect() {
             if state.rate_limit_collector.is_fresh() && state.usage.source != "api" {
                 if let Some(util) = entry.five_h_utilization {
@@ -127,9 +138,10 @@ pub fn run(config: &Config, usage_rx: Option<tokio::sync::mpsc::UnboundedReceive
         // Render
         terminal.draw(|frame| {
             let size = frame.area();
-            if size.width < 60 || size.height < 15 {
+            let min_height = if config.claude_enabled { 32 } else { 27 };
+            if size.width < 60 || size.height < min_height {
                 let msg = Paragraph::new(Line::from(Span::styled(
-                    format!("Resize terminal (min 60x15, current {}x{})", size.width, size.height),
+                    format!("Resize terminal (min 60x{}, current {}x{})", min_height, size.width, size.height),
                     Style::default().fg(Color::Yellow),
                 )));
                 frame.render_widget(msg, size);
@@ -176,20 +188,19 @@ fn compute_pace(history: &[f64]) -> &'static str {
 fn render(frame: &mut ratatui::Frame, area: Rect, state: &AppState, config: &Config) {
     let mut constraints = Vec::new();
     let claude_enabled = config.claude_enabled;
+    let has_gpu = state.gpu_data.is_some();
 
     if claude_enabled {
-        constraints.push(Constraint::Length(8));  // Claude Status (5h bar + 7d bar + source)
-        constraints.push(Constraint::Length(4));  // CPU sparkline + bar
-        constraints.push(Constraint::Length(6));  // Memory + GPU
-        constraints.push(Constraint::Length(4));  // Temps
-        constraints.push(Constraint::Length(4));  // Network
-        constraints.push(Constraint::Length(4));  // Disks
+        constraints.push(Constraint::Length(8));  // Claude Status
+        constraints.push(Constraint::Length(5));  // CPU + Temps (side by side)
+        constraints.push(Constraint::Length(if has_gpu { 5 } else { 5 }));  // Memory (+GPU)
+        constraints.push(Constraint::Length(3));  // Network (compact)
+        constraints.push(Constraint::Length(6));  // Disks
         constraints.push(Constraint::Min(5));     // Processes
     } else {
-        constraints.push(Constraint::Length(4));  // CPU sparkline + bar
-        constraints.push(Constraint::Length(6));  // Memory + GPU
-        constraints.push(Constraint::Length(4));  // Temps
-        constraints.push(Constraint::Length(4));  // Network
+        constraints.push(Constraint::Length(5));  // CPU + Temps (side by side)
+        constraints.push(Constraint::Length(if has_gpu { 5 } else { 5 }));  // Memory (+GPU)
+        constraints.push(Constraint::Length(3));  // Network (compact)
         constraints.push(Constraint::Length(6));  // Disks
         constraints.push(Constraint::Min(8));     // Processes
     }
@@ -211,20 +222,36 @@ fn render(frame: &mut ratatui::Frame, area: Rect, state: &AppState, config: &Con
         idx += 1;
     }
 
-    // CPU sparkline + bar
-    let freq_str = state.lhm_data.as_ref()
-        .and_then(|d| d.avg_cpu_freq_ghz_str())
-        .unwrap_or_else(|| {
-            let mhz = state.system.cpu_freq_mhz();
-            if mhz > 0 { format!("{:.2} GHz", mhz as f64 / 1000.0) } else { "? GHz".to_string() }
-        });
-    panels::cpu::render(
-        frame, chunks[idx],
-        state.system.cpu_percent(),
-        &freq_str,
-        state.system.cpu_history(),
-    );
+    // CPU + Temps side by side
+    let cpu_temps_area = chunks[idx];
     idx += 1;
+    {
+        let halves = Layout::horizontal([
+            Constraint::Percentage(50),
+            Constraint::Percentage(50),
+        ]).split(cpu_temps_area);
+
+        let freq_str = state.lhm_data.as_ref()
+            .and_then(|d| d.avg_cpu_freq_ghz_str())
+            .unwrap_or_else(|| {
+                let mhz = state.system.cpu_freq_mhz();
+                if mhz > 0 { format!("{:.2} GHz", mhz as f64 / 1000.0) } else { "? GHz".to_string() }
+            });
+
+        panels::cpu::render(
+            frame, halves[0],
+            state.system.cpu_percent(),
+            &freq_str,
+            state.system.cpu_avg_5min(),
+        );
+
+        // GPU temp for temps panel: prefer LHM, fallback to nvml
+        let gpu_temp = state.lhm_data.as_ref()
+            .and_then(|d| d.gpu_temp)
+            .or_else(|| state.gpu_data.as_ref().map(|g| g.temp_celsius as f32));
+
+        panels::temps::render(frame, halves[1], state.lhm_data.as_ref(), gpu_temp);
+    }
 
     // Memory + GPU side by side
     let mem_gpu_area = chunks[idx];
@@ -245,11 +272,7 @@ fn render(frame: &mut ratatui::Frame, area: Rect, state: &AppState, config: &Con
         panels::memory::render(frame, mem_gpu_area, mem_used, mem_total, swap_used, swap_total);
     }
 
-    // Temps
-    panels::temps::render(frame, chunks[idx], state.lhm_data.as_ref(), state.gpu_data.as_ref());
-    idx += 1;
-
-    // Network
+    // Network (compact)
     let (rx_now, tx_now, rx_avg, tx_avg, rx_peak, tx_peak) = state.system.net_speeds();
     panels::network::render(frame, chunks[idx], rx_now, tx_now, rx_avg, tx_avg, rx_peak, tx_peak);
     idx += 1;

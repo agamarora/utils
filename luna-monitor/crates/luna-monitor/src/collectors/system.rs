@@ -135,6 +135,18 @@ impl SystemCollector {
         &self.cpu_history
     }
 
+    /// Average CPU % over last 5 minutes (150 entries at 2s tick).
+    /// Returns None if no history yet.
+    pub fn cpu_avg_5min(&self) -> Option<f32> {
+        if self.cpu_history.is_empty() {
+            return None;
+        }
+        let count = self.cpu_history.len().min(150);
+        let start = self.cpu_history.len() - count;
+        let sum: f32 = self.cpu_history.iter().skip(start).sum();
+        Some(sum / count as f32)
+    }
+
     pub fn cpu_freq_mhz(&self) -> u64 {
         self.sys.cpus().first().map(|c| c.frequency()).unwrap_or(0)
     }

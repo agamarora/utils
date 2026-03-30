@@ -11,7 +11,7 @@ pub fn render(
     area: Rect,
     rx_now: f64, tx_now: f64,
     rx_avg: f64, tx_avg: f64,
-    rx_peak: f64, tx_peak: f64,
+    _rx_peak: f64, _tx_peak: f64,
 ) {
     let block = Block::default()
         .title(" Network ")
@@ -26,23 +26,16 @@ pub fn render(
         return;
     }
 
-    let lines = vec![
-        Line::from(vec![
-            Span::styled("↓ ", Style::default().fg(Color::Green)),
-            Span::raw(format!("{} / avg {} / peak {}",
-                charts::fmt_speed(rx_now),
-                charts::fmt_speed(rx_avg),
-                charts::fmt_speed(rx_peak))),
-        ]),
-        Line::from(vec![
-            Span::styled("↑ ", Style::default().fg(Color::Red)),
-            Span::raw(format!("{} / avg {} / peak {}",
-                charts::fmt_speed(tx_now),
-                charts::fmt_speed(tx_avg),
-                charts::fmt_speed(tx_peak))),
-        ]),
-    ];
+    // Single compact line: ↓ 1.2 Mb/s  ↑ 5 Kb/s  (avg ↓1.0 ↑3 Mb/s)
+    let line = Line::from(vec![
+        Span::styled("↓ ", Style::default().fg(Color::Green)),
+        Span::raw(charts::fmt_speed(rx_now)),
+        Span::raw("  "),
+        Span::styled("↑ ", Style::default().fg(Color::Red)),
+        Span::raw(charts::fmt_speed(tx_now)),
+        Span::raw(format!("  (avg ↓{} ↑{})", charts::fmt_speed(rx_avg), charts::fmt_speed(tx_avg))),
+    ]);
 
-    let paragraph = Paragraph::new(lines);
+    let paragraph = Paragraph::new(vec![line]);
     frame.render_widget(paragraph, inner);
 }

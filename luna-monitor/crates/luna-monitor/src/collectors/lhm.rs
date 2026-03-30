@@ -1,6 +1,6 @@
 //! LibreHardwareMonitor HTTP client.
 //! Auto-detects LHM at localhost:8085/data.json.
-//! Provides: real CPU frequency, CPU temps, GPU data.
+//! Provides: real CPU frequency, CPU temps, GPU temp.
 //! If LHM is not running, all functions return None.
 
 use std::collections::HashMap;
@@ -16,7 +16,11 @@ const LHM_CACHE_SECS: u64 = 10;
 #[derive(Debug, Clone, Default)]
 pub struct LhmData {
     pub cpu_clocks: HashMap<String, f64>,  // "CPU Core #1" -> MHz
-    pub temps: HashMap<String, f32>,        // "CPU Core #1" -> celsius
+    // Specific temp fields instead of generic HashMap
+    pub cpu_package_temp: Option<f32>,
+    pub cpu_max_temp: Option<f32>,
+    pub cpu_avg_temp: Option<f32>,
+    pub gpu_temp: Option<f32>,  // Stored independently, not on GpuData
     pub gpu: Option<GpuData>,
 }
 
@@ -92,19 +96,26 @@ fn parse_node(node: &serde_json::Value, data: &mut LhmData, path: &[String]) {
         }
     }
 
-    // Temperatures: "°C" in value
+    // Temperatures: "°C" in value — use substring matching for vendor compatibility
     if value_str.contains("°C") || value_str.contains("\u{00b0}C") {
         if let Some(celsius) = parse_numeric(value_str, "°C")
             .or_else(|| parse_numeric(value_str, "\u{00b0}C"))
         {
             if celsius > 0.0 && celsius < 120.0 {
-                if in_gpu {
-                    // GPU temperature
-                    if let Some(ref mut gpu) = data.gpu {
-                        gpu.temp_celsius = celsius as u32;
+                let text_lower = text.to_lowercase();
+
+                if in_gpu && text_lower.contains("gpu core") {
+                    // GPU Core temp — stored independently
+                    data.gpu_temp = Some(celsius as f32);
+                } else if !in_gpu {
+                    // CPU temps — substring match for Intel + AMD compatibility
+                    if text_lower.contains("package") || text_lower.contains("tdie") {
+                        data.cpu_package_temp = Some(celsius as f32);
+                    } else if text_lower.contains("core max") {
+                        data.cpu_max_temp = Some(celsius as f32);
+                    } else if text_lower.contains("core average") {
+                        data.cpu_avg_temp = Some(celsius as f32);
                     }
-                } else {
-                    data.temps.insert(text.to_string(), celsius as f32);
                 }
             }
         }
@@ -189,35 +200,48 @@ mod tests {
         let data = LhmData::default();
         assert!(data.avg_cpu_mhz().is_none());
         assert!(data.gpu.is_none());
+        assert!(data.cpu_package_temp.is_none());
+        assert!(data.gpu_temp.is_none());
     }
 
     #[test]
     fn test_lhm_unavailable() {
-        // LHM not running on port 8085 — should return None
         let result = fetch_inner();
-        // Can't guarantee LHM state, but should not crash
         let _ = result;
     }
 
     #[test]
-    fn test_parse_node_basic() {
+    fn test_parse_node_with_specific_temps() {
         let json = serde_json::json!({
             "Text": "Root",
             "Value": "",
             "Children": [
                 {
-                    "Text": "CPU",
+                    "Text": "12th Gen Intel Core i5-12400F",
                     "Value": "",
                     "Children": [
                         {
-                            "Text": "CPU Core #1",
-                            "Value": "4200 MHz",
-                            "Children": []
-                        },
+                            "Text": "Temperatures",
+                            "Value": "",
+                            "Children": [
+                                {"Text": "CPU Core #1", "Value": "4200 MHz", "Children": []},
+                                {"Text": "CPU Package", "Value": "45 °C", "Children": []},
+                                {"Text": "Core Max", "Value": "52 °C", "Children": []},
+                                {"Text": "Core Average", "Value": "38 °C", "Children": []}
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "Text": "NVIDIA GeForce RTX 3060 Ti",
+                    "Value": "",
+                    "Children": [
                         {
-                            "Text": "CPU Core #1",
-                            "Value": "65 °C",
-                            "Children": []
+                            "Text": "Temperatures",
+                            "Value": "",
+                            "Children": [
+                                {"Text": "GPU Core", "Value": "44 °C", "Children": []}
+                            ]
                         }
                     ]
                 }
@@ -227,7 +251,50 @@ mod tests {
         let mut data = LhmData::default();
         parse_node(&json, &mut data, &[]);
 
-        assert_eq!(data.cpu_clocks.get("CPU Core #1"), Some(&4200.0));
-        assert_eq!(data.temps.get("CPU Core #1"), Some(&65.0));
+        assert_eq!(data.cpu_package_temp, Some(45.0));
+        assert_eq!(data.cpu_max_temp, Some(52.0));
+        assert_eq!(data.cpu_avg_temp, Some(38.0));
+        assert_eq!(data.gpu_temp, Some(44.0));
+    }
+
+    #[test]
+    fn test_gpu_temp_before_gpu_util() {
+        // GPU temp node appears BEFORE GPU utilization node
+        // gpu_temp should still be captured (stored independently)
+        let json = serde_json::json!({
+            "Text": "Root",
+            "Value": "",
+            "Children": [
+                {
+                    "Text": "NVIDIA GeForce RTX 3060 Ti",
+                    "Value": "",
+                    "Children": [
+                        {
+                            "Text": "Temperatures",
+                            "Value": "",
+                            "Children": [
+                                {"Text": "GPU Core", "Value": "44 °C", "Children": []}
+                            ]
+                        },
+                        {
+                            "Text": "Load",
+                            "Value": "",
+                            "Children": [
+                                {"Text": "GPU Core", "Value": "25 %", "Children": []}
+                            ]
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let mut data = LhmData::default();
+        parse_node(&json, &mut data, &[]);
+
+        // gpu_temp is stored independently, not on GpuData
+        assert_eq!(data.gpu_temp, Some(44.0));
+        // GpuData should also exist from the utilization node
+        assert!(data.gpu.is_some());
+        assert_eq!(data.gpu.as_ref().unwrap().utilization_pct, 25);
     }
 }

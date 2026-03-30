@@ -1,23 +1,19 @@
 use ratatui::layout::Rect;
 use ratatui::style::Style;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, BorderType, Paragraph};
 use ratatui::Frame;
-use std::collections::VecDeque;
 
 use crate::ui::{charts, colors};
 
-const SPARK_CHARS: &[char] = &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-
-pub fn render(frame: &mut Frame, area: Rect, cpu_pct: f32, freq_str: &str, history: &VecDeque<f32>) {
-    // Build sparkline from last 20 history points
-    let spark = sparkline(history, 20);
-    let title = format!(" CPU: {:.1}% @ {} {} ", cpu_pct, freq_str, spark);
+pub fn render(frame: &mut Frame, area: Rect, cpu_pct: f32, freq_str: &str, avg_5min: Option<f32>) {
+    let border_color = colors::pct_color(cpu_pct as f64);
 
     let block = Block::default()
-        .title(title)
+        .title(" CPU ")
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(colors::SYSTEM_BORDER));
+        .border_style(Style::default().fg(border_color));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -26,21 +22,19 @@ pub fn render(frame: &mut Frame, area: Rect, cpu_pct: f32, freq_str: &str, histo
         return;
     }
 
-    let bar = charts::hbar(cpu_pct as f64, inner.width);
-    let paragraph = Paragraph::new(vec![bar]);
-    frame.render_widget(paragraph, inner);
-}
+    // Line 1: current %, avg %, frequency
+    let avg_str = match avg_5min {
+        Some(avg) if inner.width >= 30 => format!("  avg {:.1}%", avg),
+        _ => String::new(),
+    };
+    let info_line = Line::from(vec![
+        Span::styled(format!("{:.1}%", cpu_pct), Style::default().fg(colors::pct_color(cpu_pct as f64))),
+        Span::raw(format!("{}  @ {}", avg_str, freq_str)),
+    ]);
 
-fn sparkline(history: &VecDeque<f32>, width: usize) -> String {
-    if history.is_empty() {
-        return String::new();
-    }
-    let start = if history.len() > width { history.len() - width } else { 0 };
-    history.iter()
-        .skip(start)
-        .map(|&v| {
-            let idx = ((v.clamp(0.0, 100.0) / 100.0) * 7.0) as usize;
-            SPARK_CHARS[idx.min(7)]
-        })
-        .collect()
+    // Line 2: hbar
+    let bar = charts::hbar(cpu_pct as f64, inner.width);
+
+    let paragraph = Paragraph::new(vec![info_line, bar]);
+    frame.render_widget(paragraph, inner);
 }

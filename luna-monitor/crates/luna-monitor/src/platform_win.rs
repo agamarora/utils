@@ -1,5 +1,6 @@
 //! Windows-specific platform code: PDH disk active % counters.
-//! Uses ctypes-style FFI (same approach as Python version).
+//! Two-query probe approach: probe all (drive, disk_num) combos,
+//! find which ones return real data, then build a real query with only those.
 #![allow(static_mut_refs)]
 
 #[cfg(windows)]
@@ -34,6 +35,7 @@ extern "system" {
         lpdwType: *mut u32,
         pValue: *mut PdhFmtCounterValue,
     ) -> i32;
+    fn PdhCloseQuery(hQuery: *mut c_void) -> i32;
 }
 
 #[cfg(windows)]
@@ -46,35 +48,80 @@ struct PdhFmtCounterValue {
 #[cfg(windows)]
 const PDH_FMT_DOUBLE: u32 = 0x00000200;
 
-/// Initialize PDH counters for disk active time. Call once at startup.
+/// Initialize PDH counters for disk active time using two-query probe.
+/// Phase 1: open probe query, add all combos, collect twice, find working ones.
+/// Phase 2: close probe, open real query with only confirmed counters.
 #[cfg(windows)]
 pub fn init_pdh(drives: &[String]) {
     unsafe {
-        let mut query: *mut c_void = std::ptr::null_mut();
-        if PdhOpenQueryW(std::ptr::null(), 0, &mut query) != 0 {
+        // Phase 1: Probe query
+        let mut probe_query: *mut c_void = std::ptr::null_mut();
+        if PdhOpenQueryW(std::ptr::null(), 0, &mut probe_query) != 0 {
             return;
         }
-        PDH_QUERY = query;
 
-        let mut counters = HashMap::new();
-
+        // Add all (drive, disk_num) combinations
+        let mut probe_counters: Vec<(String, u32, *mut c_void)> = Vec::new();
         for drive in drives {
             let letter = drive.chars().next().unwrap_or('C');
-            // Try common physical disk indices
-            for disk_num in 0..4 {
+            for disk_num in 0..4u32 {
                 let path = format!("\\PhysicalDisk({} {}:)\\% Disk Time", disk_num, letter);
                 let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
                 let mut hc: *mut c_void = std::ptr::null_mut();
-                if PdhAddCounterW(query, wide.as_ptr(), 0, &mut hc) == 0 {
-                    counters.insert(drive.clone(), hc);
-                    break;
+                if PdhAddCounterW(probe_query, wide.as_ptr(), 0, &mut hc) == 0 {
+                    probe_counters.push((drive.clone(), disk_num, hc));
                 }
             }
         }
 
-        // Prime first sample
-        PdhCollectQueryData(query);
-        PDH_COUNTERS = Some(counters);
+        if probe_counters.is_empty() {
+            PdhCloseQuery(probe_query);
+            return;
+        }
+
+        // PDH rate counters need 2 collections to produce data
+        PdhCollectQueryData(probe_query);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        PdhCollectQueryData(probe_query);
+
+        // Read all counters, find which (drive, disk_num) pairs actually work
+        let mut confirmed: HashMap<String, u32> = HashMap::new();
+        for (drive, disk_num, hc) in &probe_counters {
+            let mut val = PdhFmtCounterValue {
+                c_status: 0,
+                double_value: 0.0,
+            };
+            let result = PdhGetFormattedCounterValue(*hc, PDH_FMT_DOUBLE, std::ptr::null_mut(), &mut val);
+            if result == 0 && val.c_status == 0 {
+                // This counter works — keep the first confirmed one per drive
+                confirmed.entry(drive.clone()).or_insert(*disk_num);
+            }
+        }
+
+        // Close probe query entirely
+        PdhCloseQuery(probe_query);
+
+        // Phase 2: Build real query with only confirmed counters
+        let mut real_query: *mut c_void = std::ptr::null_mut();
+        if PdhOpenQueryW(std::ptr::null(), 0, &mut real_query) != 0 {
+            return;
+        }
+
+        let mut real_counters = HashMap::new();
+        for (drive, disk_num) in &confirmed {
+            let letter = drive.chars().next().unwrap_or('C');
+            let path = format!("\\PhysicalDisk({} {}:)\\% Disk Time", disk_num, letter);
+            let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+            let mut hc: *mut c_void = std::ptr::null_mut();
+            if PdhAddCounterW(real_query, wide.as_ptr(), 0, &mut hc) == 0 {
+                real_counters.insert(drive.clone(), hc);
+            }
+        }
+
+        // Prime the real query
+        PdhCollectQueryData(real_query);
+        PDH_QUERY = real_query;
+        PDH_COUNTERS = Some(real_counters);
     }
 }
 
