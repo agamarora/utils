@@ -7,9 +7,9 @@ Terminal dashboard for Claude Code developers. Tracks your API usage limits, sys
 
 ## What it does
 
-- **Claude usage tracking** — 5-hour and 7-day utilization bars with reset timers and pace indicator (rising/steady/falling)
+- **Claude usage tracking** — 5-hour and 7-day utilization bars with reset timers, pace indicator (rising/steady/falling), and ETA to cap. Network speeds, proxy health (P●), and API reachability (C●) shown inline.
 - **Embedded proxy** — sits between Claude Code and the API, captures rate limit headers in real time. No polling, no scraping.
-- **System dashboard** — CPU, memory, GPU, disk I/O, network, temperatures, top processes
+- **System dashboard** — CPU, memory, GPU, disk I/O, temperatures, top processes
 - **Auto-detection** — finds LibreHardwareMonitor for real CPU frequency and temps, NVIDIA GPU via NVML, falls back gracefully when either is missing
 
 ## Install
@@ -44,7 +44,7 @@ If you skip this, luna-monitor still works — it just won't have usage data unt
 
 | Flag | Description |
 |---|---|
-| `--doctor` | Interactive setup menu — enable/disable proxy, check health |
+| `--doctor` | Interactive setup menu — enable/disable proxy, check health, then launch dashboard |
 | `--enable-proxy` | Enable proxy and write settings.json (non-interactive) |
 | `--disable-proxy` | Remove proxy from settings.json |
 | `--no-claude` | Hide Claude usage panels |
@@ -59,31 +59,29 @@ If you skip this, luna-monitor still works — it just won't have usage data unt
 With Claude enabled (~30 rows):
 
 ```
-╭ Claude Usage ───────────────────────────╮
-│ 5h: 12.3% ↑ rising  (resets in 3h 42m) │
-│ ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
-│ 7d: 5.1%             (resets in 4d 12h) │
-│ ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
-│ via proxy  23ms  142 reqs  0 429s       │
-╰─────────────────────────────────────────╯
-╭ CPU: 14.5% @ 4.21 GHz ▁▂▃▅▇█▅▃▂▁ ─────╮
-│ ██████████████░░░░░░░░░░░░░░░░░░░░░░░░░ │
-╰─────────────────────────────────────────╯
-╭ Memory ──────────────╮╭ GPU: RTX 3060 ──╮
-│ RAM: 10.5/15.8 GB    ││ Util: 7%        │
-╰──────────────────────╯╰─────────────────╯
-╭ Temperatures ───────────────────────────╮
-│ CPU Core #1: 62°C  CPU Core #2: 65°C   │
-╰─────────────────────────────────────────╯
-╭ Network ────────────────────────────────╮
-│ ↓ 1.2 Mb/s / avg 800 Kb/s / peak 5 Mb │
-╰─────────────────────────────────────────╯
-╭ Disks ──────────────────────────────────╮
-│ D: 42% active  R: 15.3 MB/s  W: 2.1 MB│
-╰─────────────────────────────────────────╯
-╭ Processes ──────────────────────────────╮
-│ claude.exe  15.6%    chrome.exe  680 MB │
-╰─────────────────────────────────────────╯
+╭ Claude Usage (Max 5x) ─────────────────╮
+│ 5h: 12.3% (resets in 3h 42m)          │
+│ ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
+│ 7d: 5.1% (resets in 4d 12h)           │
+│ ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
+│ Net ↓1.2 Mb/s ↑5 Kb/s  avg ↓1.0 ↑3   │
+│ P● C● · → steady · ETA ~2h 15m to cap │
+╰────────────────────────────────────────╯
+╭ CPU ────────────────╮╭ Temps ──────────╮
+│ 14.5% @ 4.21 GHz   ││ CPU: 39°C      │
+│ ████████████░░░░░░░ ││ GPU: 42°C      │
+╰─────────────────────╯╰────────────────╯
+╭ Memory ─────────────╮╭ GPU ────────────╮
+│ RAM: 10.5/15.8 GB   ││ RTX 3060 Ti    │
+│ Swap: 8.3/12.8 GB   ││ Util: 7%       │
+╰─────────────────────╯╰────────────────╯
+╭ Disks ─────────────────────────────────╮
+│ C:\ 2% active  328/446 GB (74%)       │
+│ D:\ 0% active  339/932 GB (36%)       │
+╰────────────────────────────────────────╯
+╭ Processes ─────────────────────────────╮
+│ claude.exe  15.6%    chrome.exe 680 MB │
+╰────────────────────────────────────────╯
 ```
 
 ## How the proxy works
@@ -126,7 +124,9 @@ GPU monitoring requires an NVIDIA GPU with drivers installed. The `nvml` library
 
 **No Claude usage data** — The proxy isn't running or hasn't captured any data yet. Run `luna-monitor --doctor` to check proxy health.
 
-**"via API" instead of "via proxy"** — The proxy isn't active. Run `luna-monitor --enable-proxy` to set it up.
+**P● is red** — The proxy isn't active. Run `luna-monitor --enable-proxy` to set it up.
+
+**C● is red** — Can't reach the Claude API. Check your internet connection or re-authenticate with `claude`.
 
 **Disk I/O shows 0 B/s** — PDH counters need one tick cycle to produce data. Wait 2-4 seconds. If a drive only shows capacity (no active %), it means PDH doesn't have a counter for that physical disk.
 
@@ -145,38 +145,36 @@ luna-monitor/
 ├── Cargo.toml              # Workspace root
 ├── crates/
 │   ├── luna-common/        # Shared types, paths, constants
-│   ├── luna-monitor/       # Dashboard binary
-│   │   └── src/
-│   │       ├── main.rs
-│   │       ├── app.rs              # Event loop + layout
-│   │       ├── config.rs           # Config load/save
-│   │       ├── platform_win.rs     # PDH disk active %
-│   │       ├── proxy_lifecycle.rs  # Spawn/manage proxy
-│   │       ├── collectors/         # Data gathering
-│   │       │   ├── system.rs       # CPU, memory, disk, network, processes
-│   │       │   ├── claude.rs       # OAuth + usage API
-│   │       │   ├── claude_local.rs # Local JSONL scanner
-│   │       │   ├── rate_limit.rs   # Proxy rate limit data
-│   │       │   ├── gpu.rs          # NVIDIA NVML + LHM fallback
-│   │       │   └── lhm.rs          # LibreHardwareMonitor HTTP client
-│   │       ├── panels/             # Rich TUI panels
-│   │       │   ├── claude_status.rs
-│   │       │   ├── cpu.rs
-│   │       │   ├── memory.rs
-│   │       │   ├── gpu.rs
-│   │       │   ├── disks.rs
-│   │       │   ├── network.rs
-│   │       │   ├── temps.rs
-│   │       │   └── processes.rs
-│   │       └── ui/                 # Charts + color utilities
-│   │           ├── charts.rs
-│   │           └── colors.rs
-│   └── luna-proxy/         # Embedded reverse proxy binary
+│   └── luna-monitor/       # Dashboard + embedded proxy binary
 │       └── src/
 │           ├── main.rs
-│           ├── proxy.rs
-│           ├── jsonl.rs
-│           └── health.rs
+│           ├── app.rs              # Event loop + layout
+│           ├── config.rs           # Config load/save
+│           ├── platform_win.rs     # PDH disk active %
+│           ├── proxy_lifecycle.rs  # Spawn/manage proxy process
+│           ├── collectors/         # Data gathering
+│           │   ├── system.rs       # CPU, memory, disk, network, processes
+│           │   ├── claude.rs       # OAuth + usage API
+│           │   ├── claude_local.rs # Local JSONL scanner
+│           │   ├── rate_limit.rs   # Proxy rate limit data
+│           │   ├── gpu.rs          # NVIDIA NVML + LHM fallback
+│           │   └── lhm.rs          # LibreHardwareMonitor HTTP client
+│           ├── panels/             # Rich TUI panels
+│           │   ├── claude_status.rs # Usage bars + net + status dots + ETA
+│           │   ├── cpu.rs
+│           │   ├── memory.rs
+│           │   ├── gpu.rs
+│           │   ├── disks.rs
+│           │   ├── network.rs      # Standalone (when Claude disabled)
+│           │   ├── temps.rs
+│           │   └── processes.rs
+│           ├── proxy/              # Embedded reverse proxy
+│           │   ├── server.rs       # HTTP proxy + header capture
+│           │   ├── jsonl.rs        # Rate limit JSONL logging
+│           │   └── health.rs       # Proxy health endpoint
+│           └── ui/                 # Charts + color utilities
+│               ├── charts.rs
+│               └── colors.rs
 ```
 
 ## Requirements

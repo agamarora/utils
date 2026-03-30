@@ -33,7 +33,7 @@ The monitor is one 590-line Python file with no internal modules. It uses Rich `
 
 ### luna-monitor/ (Rust workspace)
 
-Terminal dashboard for Claude Code developers. Rust workspace with 3 crates, 67 tests.
+Terminal dashboard for Claude Code developers. Rust workspace with 2 crates, 63 tests.
 
 ```bash
 cd luna-monitor && cargo build --release
@@ -42,12 +42,11 @@ cd luna-monitor && cargo build --release
 
 **Workspace layout:** `crates/` with:
 - `luna-common/` — shared types (UsageData, ProxyHealth, RateLimitEntry), path constants
-- `luna-monitor/` — dashboard binary (ratatui TUI, collectors, panels)
-- `luna-proxy/` — embedded reverse proxy binary (captures rate limit headers)
+- `luna-monitor/` — dashboard binary + embedded proxy (ratatui TUI, collectors, panels, proxy)
 
 **Collectors:** system.rs (sysinfo), claude.rs (OAuth + usage API), claude_local.rs (JSONL scanner), rate_limit.rs (proxy data), gpu.rs (nvml + LHM fallback), lhm.rs (LibreHardwareMonitor HTTP auto-detection)
 
-**Panels:** claude_status (5h/7d bars + pace + proxy health), cpu (sparkline + hbar), memory, gpu, disks (I/O + active %), network, temps, processes
+**Panels:** claude_status (5h/7d bars + pace + ETA + net speeds + P●/C● status dots), cpu (sparkline + hbar), memory, gpu, disks (I/O + active %), network (standalone when Claude disabled), temps, processes
 
 **Key design choices:**
 - Proxy runs as a separate process, managed by proxy_lifecycle.rs (spawn, PID file, crash recovery)
