@@ -33,6 +33,17 @@ On first launch it sets up the proxy. That's it. Usage data appears within secon
 
 ---
 
+## og-squish — 1200×630 OG image optimizer
+
+Your Open Graph image is 2.8 MB and broken at 4K. og-squish resizes to exact 1200×630 and compresses to <300 KB in one command. PNG or JPG — no WebP, because LinkedIn and iMessage still crop or reject WebP OG cards in 2026.
+
+```bash
+cd og-squish && npm install
+node optimize.mjs /path/to/og-images/
+```
+
+[Documentation →](og-squish/)
+
 ## monitor — Terminal System Monitor (Python)
 
 The original Python prototype. A real-time system dashboard with CPU waveforms, disk active %, GPU stats, and temperatures. Still works, but luna-monitor is the recommended tool now.

@@ -1,0 +1,16 @@
+{
+  "name": "og-squish",
+  "version": "0.1.0",
+  "description": "Squish PNG/JPG OG images to 1200x630 + web-safe sizes. Offline. Zero config.",
+  "type": "module",
+  "bin": {
+    "og-squish": "./optimize.mjs"
+  },
+  "scripts": {
+    "start": "node optimize.mjs"
+  },
+  "dependencies": {
+    "sharp": "^0.33.5"
+  },
+  "license": "MIT"
+}
